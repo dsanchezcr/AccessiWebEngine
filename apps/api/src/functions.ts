@@ -51,6 +51,12 @@ const requestUser = async (request: HttpRequest) => {
   return getOrCreateUser(claims)
 }
 
+const optionalScanOwner = async (request: HttpRequest): Promise<string | undefined> => {
+  const authorization = request.headers.get('authorization')
+  if (!authorization) return undefined
+  return (await requestUser(request)).entraOid
+}
+
 const requirePreview = async (request: HttpRequest) => {
   if (process.env.FEATURE_ENABLE_AUTO_PR_PREVIEW !== 'true') {
     throw new RequestError(403, 'Autonomous remediation preview is disabled.')
@@ -213,18 +219,31 @@ app.http('webScan', {
   route: 'v1/scans/web',
   handler: async (request, context) => {
     try {
-      const body = await bodyOf<{ targetUrl?: unknown; targetRepoUrl?: unknown; screenshotBase64?: unknown }>(request)
+      const body = await bodyOf<{
+        targetUrl?: unknown
+        targetRepoUrl?: unknown
+        screenshotBase64?: unknown
+        screenshotMimeType?: unknown
+      }>(request)
       const targetUrl = ensureString(body.targetUrl, 'targetUrl')
       const issueRepo = typeof body.targetRepoUrl === 'string' && body.targetRepoUrl.trim()
         ? parseRepoUrl(body.targetRepoUrl.trim())
         : undefined
       const screenshotBase64 = typeof body.screenshotBase64 === 'string' ? body.screenshotBase64 : ''
-      if (screenshotBase64.length > 8_000_000 || (screenshotBase64 && !/^[A-Za-z0-9+/]+={0,2}$/.test(screenshotBase64))) {
+      const screenshotMimeType = typeof body.screenshotMimeType === 'string' ? body.screenshotMimeType : 'image/png'
+      if (
+        screenshotBase64.length > 8_000_000 ||
+        (screenshotBase64 && (!/^[A-Za-z0-9+/]+={0,2}$/.test(screenshotBase64) ||
+          !['image/png', 'image/jpeg', 'image/webp'].includes(screenshotMimeType)))
+      ) {
         throw new RequestError(400, 'The screenshot must be a valid base64 image smaller than 6 MB.')
       }
       const html = await fetchHtml(targetUrl)
-      const report = await meta().analyzeWebDomAndVisuals(targetUrl, html, screenshotBase64, {})
-      const scanId = await saveScan('WEB_URL', targetUrl, report)
+      const screenshotDataUrl = screenshotBase64
+        ? `data:${screenshotMimeType};base64,${screenshotBase64}`
+        : ''
+      const report = await meta().analyzeWebDomAndVisuals(targetUrl, html, screenshotDataUrl, {})
+      const scanId = await saveScan('WEB_URL', targetUrl, report, await optionalScanOwner(request))
       return json({ scanId, report, ...(issueRepo ? { issueRepoUrl: issueRepo.url } : {}) })
     } catch (error) {
       return fail(error, context)
@@ -243,7 +262,7 @@ app.http('repositoryScan', {
       const branch = typeof body.branch === 'string' ? body.branch : undefined
       const { files } = await getRepoFiles(new Octokit(), repo.owner, repo.repo, branch)
       const report = await meta().analyzeRepositorySource(repo.url, files)
-      const scanId = await saveScan('SOURCE_CODE', repo.url, report)
+      const scanId = await saveScan('SOURCE_CODE', repo.url, report, await optionalScanOwner(request))
       return json({ scanId, report })
     } catch (error) {
       return fail(error, context)
@@ -259,6 +278,11 @@ app.http('createIssue', {
     try {
       const body = await bodyOf<{ repoUrl?: unknown; title?: unknown; body?: unknown }>(request)
       const repo = parseRepoUrl(ensureString(body.repoUrl, 'repoUrl'))
+      const title = ensureString(body.title, 'title')
+      const issueBody = ensureString(body.body, 'body')
+      if (title.length > 200 || issueBody.length > 60_000) {
+        throw new RequestError(413, 'Issue title or report exceeds the GitHub size limit.')
+      }
       const token = process.env.GITHUB_BOT_TOKEN
       if (!token) throw new RequestError(503, 'GitHub issue creation is not configured.')
       const octokit = new Octokit({ auth: token })
@@ -279,8 +303,8 @@ app.http('createIssue', {
       const { data } = await octokit.issues.create({
         owner: repo.owner,
         repo: repo.repo,
-        title: ensureString(body.title, 'title'),
-        body: ensureString(body.body, 'body'),
+        title,
+        body: issueBody,
         labels: ['accessibility', 'wcag-2.2', 'accessiweb-audit'],
       })
       return json({ issueUrl: data.html_url })
@@ -299,6 +323,22 @@ app.http('audioPreview', {
       const body = await bodyOf<{ auditSummary?: unknown }>(request)
       const audio = await meta().generateAudioEmpathyPreview(ensureString(body.auditSummary, 'auditSummary'))
       return json(audio)
+    } catch (error) {
+      return fail(error, context)
+    }
+  },
+})
+
+app.http('generateImage', {
+  methods: ['POST'],
+  authLevel: 'anonymous',
+  route: 'v1/images/accessibility-placeholder',
+  handler: async (request, context) => {
+    try {
+      const body = await bodyOf<{ prompt?: unknown }>(request)
+      const prompt = ensureString(body.prompt, 'prompt')
+      if (prompt.length > 1_000) throw new RequestError(400, 'Image prompt must be 1,000 characters or fewer.')
+      return json(await meta().generateAccessiblePlaceholderImage(prompt))
     } catch (error) {
       return fail(error, context)
     }
@@ -369,7 +409,7 @@ app.http('remediatePullRequest', {
   handler: async (request, context) => {
     try {
       const user = await requirePreview(request)
-      const body = await bodyOf<{ repoUrl?: unknown; baseBranch?: unknown }>(request)
+      const body = await bodyOf<{ repoUrl?: unknown; baseBranch?: unknown; targetRepoOwner?: unknown }>(request)
       const repo = parseRepoUrl(ensureString(body.repoUrl, 'repoUrl'))
       const token = process.env.GITHUB_BOT_TOKEN
       if (!token) throw new RequestError(503, 'GitHub remediation is not configured.')
@@ -405,23 +445,54 @@ app.http('remediatePullRequest', {
       const timestamp = Date.now()
       const branch = `fix/accessiweb-wcag-remediation-${timestamp}`
       const targetOwner = repo.owner
+      const authenticated = await octokit.users.getAuthenticated()
+      if (
+        typeof body.targetRepoOwner === 'string' &&
+        body.targetRepoOwner.toLowerCase() !== authenticated.data.login.toLowerCase()
+      ) {
+        throw new RequestError(403, 'The requested fork owner must be the authenticated GitHub bot account.')
+      }
       let commitOwner = targetOwner
-      try {
+      let canPush = targetOwner.toLowerCase() === authenticated.data.login.toLowerCase()
+      if (!canPush) {
+        try {
+          const permission = await octokit.repos.getCollaboratorPermissionLevel({
+            owner: targetOwner,
+            repo: repo.repo,
+            username: authenticated.data.login,
+          })
+          canPush = ['admin', 'maintain', 'write'].includes(permission.data.permission)
+        } catch {
+          canPush = false
+        }
+      }
+      if (canPush) {
         await octokit.git.createRef({
           owner: commitOwner,
           repo: repo.repo,
           ref: `refs/heads/${branch}`,
           sha: headSha,
         })
-      } catch {
+      } else {
         const fork = await octokit.repos.createFork({ owner: targetOwner, repo: repo.repo })
         commitOwner = fork.data.owner.login
-        await octokit.git.createRef({
-          owner: commitOwner,
-          repo: repo.repo,
-          ref: `refs/heads/${branch}`,
-          sha: headSha,
-        })
+        let lastError: unknown
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          try {
+            await octokit.git.createRef({
+              owner: commitOwner,
+              repo: repo.repo,
+              ref: `refs/heads/${branch}`,
+              sha: headSha,
+            })
+            lastError = undefined
+            break
+          } catch (error) {
+            lastError = error
+            await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)))
+          }
+        }
+        if (lastError) throw lastError
       }
 
       const remediationReport = [
@@ -429,6 +500,7 @@ app.http('remediatePullRequest', {
         '',
         `Repository: ${repo.url}`,
         `Baseline score: ${audit.score}/100`,
+        `Estimated score after remediation: ${plan.estimatedScoreAfter ?? 'Requires a follow-up audit'}`,
         '',
         '## Executive summary',
         '',
@@ -449,6 +521,11 @@ app.http('remediatePullRequest', {
         '## Verification notes',
         '',
         ...plan.verificationNotes.map((note) => `- ${note}`),
+        '',
+        '## WCAG 2.2 AA/AAA checklist',
+        '',
+        ...[...new Set(audit.findings.map((finding) => finding.wcagCriterion))].map((criterion) => `- [x] ${criterion}`),
+        '- [ ] Perform manual keyboard, screen-reader, and visual verification before merging.',
       ].join('\n')
       const entries = await Promise.all(patches.map(async (patch) => {
         const blob = await octokit.git.createBlob({
@@ -496,7 +573,7 @@ app.http('remediatePullRequest', {
         head: commitOwner === targetOwner ? branch : `${commitOwner}:${branch}`,
         base: baseBranch,
         title: 'Remediate accessibility findings with AccessiWeb Engine',
-        body: `${plan.reportMarkdown}\n\n## Verification\n\n${plan.verificationNotes.map((note) => `- ${note}`).join('\n')}`,
+        body: `## Compliance scores\n\n| Before | Estimated after |\n| ---: | ---: |\n| ${audit.score}/100 | ${plan.estimatedScoreAfter ?? 'Follow-up audit required'}${plan.estimatedScoreAfter === undefined ? '' : '/100'} |\n\n## Changed files\n\n${patches.map((patch) => `- \`${patch.filePath}\` — ${patch.findingIds.length} finding(s) addressed`).join('\n')}\n\n${plan.reportMarkdown}\n\n## Verification\n\n${plan.verificationNotes.map((note) => `- ${note}`).join('\n')}\n\n- [ ] Review all changes and manually verify with keyboard and assistive technology before merging.`,
       })
       const record = {
         id: `remediation_${timestamp}`,

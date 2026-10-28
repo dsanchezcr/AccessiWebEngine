@@ -10,6 +10,7 @@ export interface AuditFinding {
   title: string
   description: string
   filePath?: string
+  selector?: string
   startLine?: number
   endLine?: number
   wcagCriterion: string
@@ -35,6 +36,7 @@ export interface SourceCodeAuditReport extends AccessibilityAuditReport {
 }
 
 export interface RemediationPlan {
+  estimatedScoreAfter?: number
   patches: Array<{
     filePath: string
     content: string
@@ -42,5 +44,6 @@ export interface RemediationPlan {
     findingIds: string[]
   }>
   reportMarkdown: string
+  fileExplanations?: Array<{ filePath: string; explanation: string; wcagCriteria: string[] }>
   verificationNotes: string[]
 }

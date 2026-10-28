@@ -2,5 +2,8 @@
   "name": "@accessiweb/engine",
   "private": true,
   "version": "0.1.0",
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "typescript": "^5.9.3"
+  }
 }

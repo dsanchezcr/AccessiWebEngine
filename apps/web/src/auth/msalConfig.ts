@@ -6,8 +6,17 @@ const authority = tenant && policy
   ? `https://${tenant}.b2clogin.com/${tenant}.onmicrosoft.com/${policy}`
   : undefined
 
+const profilePolicy = import.meta.env.VITE_ENTRA_B2C_PROFILE_EDIT_POLICY
+const profileEditAuthority = tenant && profilePolicy
+  ? `https://${tenant}.b2clogin.com/${tenant}.onmicrosoft.com/${profilePolicy}`
+  : undefined
+
 export const apiScope = import.meta.env.VITE_ENTRA_B2C_API_SCOPE || 'openid'
 export const loginRequest = { scopes: ['openid', 'profile', apiScope] }
+export const profileEditRequest = {
+  ...loginRequest,
+  ...(profileEditAuthority ? { authority: profileEditAuthority } : {}),
+}
 
 export const msalInstance = new PublicClientApplication({
   auth: {

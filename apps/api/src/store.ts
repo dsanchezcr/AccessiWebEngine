@@ -70,6 +70,7 @@ export const saveScan = async (
   scanType: 'WEB_URL' | 'SOURCE_CODE',
   target: string,
   report: unknown,
+  entraOid?: string,
 ): Promise<string> => {
   const container = await getContainer('scans', '/scanType')
   const id = crypto.randomUUID()
@@ -78,6 +79,7 @@ export const saveScan = async (
     scanType,
     target,
     report,
+    ...(entraOid ? { entraOid } : {}),
     createdAt: new Date().toISOString(),
   })
   return id
@@ -99,12 +101,18 @@ export const saveRemediation = async (record: {
 export const deleteUserData = async (user: AccessiWebUser): Promise<void> => {
   const users = await getContainer('users', '/entraOid')
   const remediations = await getContainer('remediations', '/entraOid')
+  const scans = await getContainer('scans', '/scanType')
+  const { resources: ownedScans } = await scans.items.query<{ id: string; scanType: 'WEB_URL' | 'SOURCE_CODE' }>({
+    query: 'SELECT c.id, c.scanType FROM c WHERE c.entraOid = @entraOid',
+    parameters: [{ name: '@entraOid', value: user.entraOid }],
+  }).fetchAll()
   const { resources } = await remediations.items.query<{ id: string }>({
     query: 'SELECT c.id FROM c WHERE c.entraOid = @entraOid',
     parameters: [{ name: '@entraOid', value: user.entraOid }],
   }).fetchAll()
-  await Promise.all(resources.map(({ id }) =>
-    remediations.item(id, user.entraOid).delete(),
-  ))
+  await Promise.all([
+    ...resources.map(({ id }) => remediations.item(id, user.entraOid).delete()),
+    ...ownedScans.map(({ id, scanType }) => scans.item(id, scanType).delete()),
+  ])
   await users.item(user.id, user.entraOid).delete()
 }

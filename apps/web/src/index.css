@@ -15,6 +15,7 @@
   --mint: #e7f2eb;
   --border: #d7e2dc;
   --paper: #fff;
+  --page-bg: #f7f8f6;
   --focus: #a64b00;
 }
 
@@ -36,22 +37,42 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
   .button, .category-card, .rule-card, .preview-box, .scanner-panel { border-width: 2px; }
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #ecf4ef;
-    background: #12231f;
-    --ink: #ecf4ef;
-    --muted: #bfd0c8;
-    --green: #69d6b3;
-    --green-dark: #8be1c4;
-    --mint: #1d3831;
-    --border: #3c574e;
-    --paper: #182e28;
-    --focus: #ffc465;
-  }
+[data-theme='dark'] {
+  color-scheme: dark;
+  --ink: #ecf4ef;
+  --muted: #bfd0c8;
+  --green: #69d6b3;
+  --green-dark: #8be1c4;
+  --mint: #1d3831;
+  --border: #3c574e;
+  --paper: #182e28;
+  --page-bg: #12231f;
+  --focus: #ffc465;
+}
+
+[data-theme='high-contrast'] {
+  color-scheme: light;
+  --ink: #000;
+  --muted: #111;
+  --green: #00392f;
+  --green-dark: #00392f;
+  --mint: #fff;
+  --border: #000;
+  --paper: #fff;
+  --page-bg: #fff;
+  --focus: #a12600;
+}
+
+.app-shell {
+  min-height: 100vh;
+  color: var(--ink);
+  background: var(--page-bg);
+}
+
+[data-theme='dark'] {
   .button-primary { background: #075e50; color: #fff; }
   .button-secondary { color: #ecf4ef; }
-  .mode-switch button[aria-pressed='true'] { color: #ecf4ef; }
+  .mode-switch button[aria-selected='true'] { color: #ecf4ef; }
   .brand-mark { color: #0e2923; background: #69d6b3; }
   .hero-card { background: #1d3831; }
   .hero-chip { color: #ecf4ef; }

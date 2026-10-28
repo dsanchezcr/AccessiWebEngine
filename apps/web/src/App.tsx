@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useIsAuthenticated, useMsal } from '@azure/msal-react'
 import type { AccessibilityAuditReport, AuditFinding, SourceCodeAuditReport } from '../../../packages/shared/src/types'
-import { apiScope, loginRequest } from './auth/msalConfig'
+import { apiScope, loginRequest, profileEditRequest } from './auth/msalConfig'
 import './App.css'
 
 type ScanMode = 'web' | 'repo' | 'preview'
@@ -12,23 +12,37 @@ const apiBase = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/+$/, ''
 const apiUrl = (path: string) => `${apiBase}/v1/${path}`
 
 const rules: Array<[string, string]> = [
-  ['Visual & layout', 'Contrast (4.5:1 AA / 7:1 AAA), 24 × 24 CSS-pixel minimum targets, focus visibility, zoom and reflow.'],
-  ['Semantics & structure', 'Landmarks, heading order, accessible names and roles, form labels, image alternatives and table headers.'],
-  ['Keyboard & interaction', 'Keyboard operation, focus order, non-semantic click targets, modal focus and live announcements.'],
+  ['Perceivable — text alternatives', '1.1.1 Non-text Content: useful alternatives for images and other non-text content.'],
+  ['Perceivable — adaptable structure', '1.3.1 Info and Relationships; 1.3.2 Meaningful Sequence; 1.3.3 Sensory Characteristics.'],
+  ['Perceivable — presentation', '1.4.1 Use of Color; 1.4.3 Contrast (Minimum, 4.5:1); 1.4.4 Resize Text; 1.4.10 Reflow; 1.4.11 Non-text Contrast; 1.4.12 Text Spacing; 1.4.13 Content on Hover or Focus.'],
+  ['Operable — keyboard and timing', '2.1.1 Keyboard; 2.1.2 No Keyboard Trap; 2.1.4 Character Key Shortcuts; 2.2.1 Timing Adjustable; 2.2.2 Pause, Stop, Hide.'],
+  ['Operable — navigation and focus', '2.4.1 Bypass Blocks; 2.4.2 Page Titled; 2.4.3 Focus Order; 2.4.6 Headings and Labels; 2.4.7 Focus Visible; 2.4.11 Focus Not Obscured.'],
+  ['Operable — input modalities', '2.5.1 Pointer Gestures; 2.5.2 Pointer Cancellation; 2.5.3 Label in Name; 2.5.4 Motion Actuation; 2.5.7 Dragging Movements; 2.5.8 Target Size (Minimum, 24 × 24 CSS pixels).'],
+  ['Understandable — language and predictability', '3.1.1 Language of Page; 3.1.2 Language of Parts; 3.2.1 On Focus; 3.2.2 On Input; 3.2.3 Consistent Navigation; 3.2.4 Consistent Identification.'],
+  ['Understandable — forms and errors', '3.3.1 Error Identification; 3.3.2 Labels or Instructions; 3.3.3 Error Suggestion; 3.3.4 Error Prevention (Legal, Financial, Data).'],
+  ['Robust — compatibility', '4.1.2 Name, Role, Value; 4.1.3 Status Messages.'],
+  ['AAA examples', '1.4.6 Contrast (Enhanced, 7:1); 2.4.8 Location; 2.4.9 Link Purpose (Link Only); 2.5.5 Target Size (Enhanced, 44 × 44 CSS pixels); 3.3.5 Help; 3.3.6 Error Prevention (All).'],
 ]
 
 const pages: Record<string, { title: string; intro: string; sections: Array<[string, string]> }> = {
   '/what-we-scan': {
     title: 'What we scan',
     intro: 'AccessiWeb combines source-level checks with an AI-assisted review of rendered page structure to surface actionable WCAG 2.2 issues.',
-    sections: rules,
+    sections: [
+      ['Visual & layout · SAM 3.1', rules[2][1]],
+      ['Targets & focus · SAM 3.1', `${rules[4][1]} ${rules[5][1]} ${rules[9][1]}`],
+      ['Semantic structure · Muse Code', `${rules[0][1]} ${rules[1][1]} Landmark and heading order, table headers, skip links, labels, invalid ARIA and image alternative quality.`],
+      ['Keyboard & interaction · Muse Code AST', `${rules[3][1]} ${rules[4][1]} Non-semantic click handlers, keyboard handlers, modal focus, focus traps, live announcements and dynamic status.`],
+      ['Language, errors & compatibility', `${rules[6][1]} ${rules[7][1]} ${rules[8][1]}`],
+      ['AAA checks', rules[9][1]],
+    ],
   },
   '/how-it-works': {
     title: 'How it works',
     intro: 'Audits follow a transparent pipeline. Meta models assist with analysis and proposed changes; repository writes are gated and reviewed through a pull request.',
     sections: [
       ['1. Ingest', 'A public URL or public GitHub repository is validated and its relevant markup is processed in memory.'],
-      ['2. Audit', 'Muse Code returns structured findings. Web screenshot segmentation is available when a screenshot is provided to the engine.'],
+      ['2. Audit', 'Muse Code returns structured findings, with SAM 3.1 screenshot segmentation and optional Muse Spark Open routing.'],
       ['3. Remediate & verify', 'For enabled preview accounts, Muse Code proposes complete file patches and verification notes.'],
       ['4. Submit', 'The GitHub integration creates a branch and pull request. A maintainer can inspect every change before merging.'],
     ],
@@ -37,10 +51,10 @@ const pages: Record<string, { title: string; intro: string; sections: Array<[str
     title: 'Privacy & security',
     intro: 'Public page content and source files are processed to produce an audit; the service persists structured results rather than raw page or source contents.',
     sections: [
-      ['Data handling', 'Scan reports and line references are stored in Cosmos DB. Raw HTML and repository file contents are not saved by the scan service.'],
+      ['Data handling', 'Scan reports and line references are stored in Cosmos DB. Raw HTML and repository file contents are not saved. Signed-in scans can be removed with the account deletion request.'],
       ['Authentication', 'Preview APIs validate Entra ID B2C bearer tokens and require both a global feature switch and a per-user feature flag.'],
       ['Credentials', 'Meta, GitHub and Cosmos credentials are read from server-side environment configuration. Never put secrets in Vite environment variables.'],
-      ['Retention', 'Configure Cosmos DB retention and access controls for your deployment. Account-data deletion endpoints should be enabled before production use.'],
+      ['Retention', 'Use DELETE /api/v1/users/me/data to delete your account, its associated scans, and remediation records. Apply your deployment’s retention policy for anonymous scans.'],
     ],
   },
   '/about': {
@@ -73,7 +87,9 @@ async function apiRequest<T>(path: string, token: string | undefined, options?: 
   return payload
 }
 
-function Header() {
+type Theme = 'light' | 'dark' | 'high-contrast'
+
+function Header({ theme, onThemeChange }: { theme: Theme; onThemeChange: (theme: Theme) => void }) {
   const { instance, accounts } = useMsal()
   const authenticated = useIsAuthenticated()
   const account = accounts[0]
@@ -90,23 +106,47 @@ function Header() {
         <a href="/about">About</a>
       </nav>
       {authenticated ? (
-        <button className="button button-quiet" onClick={() => void instance.logoutRedirect({ account })}>
-          Sign out
-        </button>
+        <div className="auth-actions">
+          <button className="button button-quiet" onClick={() => void instance.loginRedirect(profileEditRequest)}>
+            Edit profile
+          </button>
+          <button className="button button-quiet" onClick={() => void instance.logoutRedirect({ account })}>
+            Sign out
+          </button>
+        </div>
       ) : (
         <a className="button button-quiet" href="#preview" onClick={() => window.dispatchEvent(new Event('accessiweb:preview'))}>
           Sign in
         </a>
       )}
+      <label className="theme-control">
+        <span>Theme</span>
+        <select value={theme} onChange={(event) => onThemeChange(event.target.value as Theme)}>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+          <option value="high-contrast">AAA contrast</option>
+        </select>
+      </label>
     </header>
   )
 }
 
-function Report({ result, repositoryUrl }: { result: ScanResult; repositoryUrl: string }) {
+function Report({
+  result,
+  repositoryUrl,
+  screenshotDataUrl,
+}: {
+  result: ScanResult
+  repositoryUrl: string
+  screenshotDataUrl: string
+}) {
   const [message, setMessage] = useState('')
   const [issueUrl, setIssueUrl] = useState('')
   const [audioUrl, setAudioUrl] = useState('')
   const [audioLoading, setAudioLoading] = useState(false)
+  const [shareCard, setShareCard] = useState<{ dataUrl: string; altText: string }>()
+  const [imageLoading, setImageLoading] = useState(false)
+  const [screenshotDimensions, setScreenshotDimensions] = useState<{ width: number; height: number }>()
   useEffect(() => () => {
     if (audioUrl) URL.revokeObjectURL(audioUrl)
   }, [audioUrl])
@@ -119,8 +159,43 @@ function Report({ result, repositoryUrl }: { result: ScanResult; repositoryUrl: 
     '',
     report.summary,
     '',
-    ...findings.map((finding) => `## ${finding.title}\n\n- WCAG: ${finding.wcagCriterion}\n- Severity: ${finding.severity}\n- File: ${finding.filePath ?? 'Web page'}${finding.startLine ? `:${finding.startLine}` : ''}\n\n${finding.description}\n\n${finding.suggestedFixCode ? `\`\`\`\n${finding.suggestedFixCode}\n\`\`\`` : ''}`),
+    '| WCAG criterion | Severity | File / selector | Finding |',
+    '| --- | --- | --- | --- |',
+    ...findings.map((finding) =>
+      `| ${finding.wcagCriterion} | ${finding.severity} | ${finding.filePath ?? 'Web page'}${finding.startLine ? `:${finding.startLine}` : ''}${finding.selector ? ` · \`${finding.selector}\`` : ''} | ${finding.title} |`,
+    ),
+    '',
+    ...[...new Set(findings.map((finding) => finding.filePath ?? 'Web page'))].flatMap((filePath) => [
+      `<details><summary>${filePath}</summary>`,
+      '',
+      ...findings.filter((finding) => (finding.filePath ?? 'Web page') === filePath).flatMap((finding) => [
+        `### ${finding.title}`,
+        '',
+        finding.description,
+        ...(finding.selector ? ['', `Selector: \`${finding.selector}\``] : []),
+        ...(finding.codeSnippet ? ['', 'Current code:', '```', finding.codeSnippet, '```'] : []),
+        ...(finding.suggestedFixCode ? ['', 'Suggested fix:', '```', finding.suggestedFixCode, '```'] : []),
+        '',
+      ]),
+      '</details>',
+      '',
+    ]),
   ].join('\n')
+
+  const openManualIssue = () => {
+    try {
+      const repo = new URL(repositoryUrl)
+      const path = repo.pathname.split('/').filter(Boolean)
+      if (repo.hostname !== 'github.com' || path.length < 2) throw new Error('Invalid GitHub repository URL.')
+      const issue = new URL(`https://github.com/${path[0]}/${path[1]}/issues/new`)
+      issue.searchParams.set('title', `Accessibility audit: ${findings.length} finding${findings.length === 1 ? '' : 's'}`)
+      issue.searchParams.set('body', markdown.slice(0, 6000))
+      window.open(issue.href, '_blank', 'noopener,noreferrer')
+      if (markdown.length > 6000) setMessage('The issue draft is shortened; copy the full report Markdown first.')
+    } catch {
+      setMessage('Enter a valid GitHub repository to prefill a manual issue.')
+    }
+  }
 
   const copyReport = async () => {
     try {
@@ -172,6 +247,38 @@ function Report({ result, repositoryUrl }: { result: ScanResult; repositoryUrl: 
     }
   }
 
+  const generateShareCard = async () => {
+    setImageLoading(true)
+    setMessage('')
+    try {
+      const generated = await apiRequest<{ imageBase64: string; mimeType: string; altText: string }>(
+        'images/accessibility-placeholder',
+        undefined,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            prompt: `Create a high-contrast accessible social card. Include the score ${report.score}/100 and ${findings.length} accessibility findings. Use large readable text and a simple uncluttered composition.`,
+          }),
+        },
+      )
+      if (
+        generated.imageBase64.length > 20_000_000 ||
+        !/^[A-Za-z0-9+/]+={0,2}$/.test(generated.imageBase64) ||
+        !['image/png', 'image/jpeg', 'image/webp'].includes(generated.mimeType)
+      ) {
+        throw new Error('The image service returned an unsupported image.')
+      }
+      setShareCard({
+        dataUrl: `data:${generated.mimeType};base64,${generated.imageBase64}`,
+        altText: generated.altText,
+      })
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Share card generation failed.')
+    } finally {
+      setImageLoading(false)
+    }
+  }
+
   const share = () => {
     const text = `Accessibility audit score: ${report.score}/100 — ${findings.length} WCAG findings.`
     window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer')
@@ -197,6 +304,36 @@ function Report({ result, repositoryUrl }: { result: ScanResult; repositoryUrl: 
       {report.visualSegments?.length ? (
         <section aria-labelledby="visual-heading">
           <h3 id="visual-heading">Visual segmentation</h3>
+          {screenshotDataUrl ? (
+            <figure className="visual-overlay">
+              <div className="visual-overlay-image">
+                <img
+                  src={screenshotDataUrl}
+                  alt="User-provided webpage screenshot with interactive controls marked"
+                  onLoad={(event) => setScreenshotDimensions({
+                    width: event.currentTarget.naturalWidth,
+                    height: event.currentTarget.naturalHeight,
+                  })}
+                />
+                {screenshotDimensions ? report.visualSegments.map((segment, index) => (
+                  <span
+                    className={`visual-box${segment.issue ? ' visual-box-issue' : ''}`}
+                    key={`${segment.label}-${index}`}
+                    style={{
+                      left: `${segment.bounds.x / screenshotDimensions.width * 100}%`,
+                      top: `${segment.bounds.y / screenshotDimensions.height * 100}%`,
+                      width: `${segment.bounds.width / screenshotDimensions.width * 100}%`,
+                      height: `${segment.bounds.height / screenshotDimensions.height * 100}%`,
+                    }}
+                    title={`${segment.label}${segment.issue ? `: ${segment.issue}` : ''}`}
+                  >
+                    <span>{segment.label}</span>
+                  </span>
+                )) : null}
+              </div>
+              <figcaption>Interactive elements segmented by SAM 3.1. Marked bounds indicate a visual concern.</figcaption>
+            </figure>
+          ) : null}
           <ul className="segment-list">
             {report.visualSegments.map((segment, index) => (
               <li key={`${segment.label}-${index}`}>
@@ -209,25 +346,44 @@ function Report({ result, repositoryUrl }: { result: ScanResult; repositoryUrl: 
       ) : null}
       <div className="finding-list">
         <h3>{findings.length} finding{findings.length === 1 ? '' : 's'}</h3>
-        {findings.length ? findings.map((finding: AuditFinding, index) => (
-          <details className="finding" key={`${finding.id}-${index}`}>
-            <summary><span className={`severity severity-${finding.severity}`}>{finding.severity}</span>{finding.title}</summary>
-            <p>{finding.description}</p>
-            <p className="finding-meta">{finding.wcagCriterion}{finding.filePath ? ` · ${finding.filePath}` : ''}{finding.startLine ? `:${finding.startLine}` : ''}</p>
-            {finding.codeSnippet ? <pre><code>{finding.codeSnippet}</code></pre> : null}
-            {finding.suggestedFixCode ? <pre><code>{finding.suggestedFixCode}</code></pre> : null}
+        {findings.length ? [...new Set(findings.map((finding) => finding.filePath ?? 'Web page'))].map((filePath) => (
+          <details className="finding-file" key={filePath} open>
+            <summary>{filePath}</summary>
+            {findings.filter((finding) => (finding.filePath ?? 'Web page') === filePath).map((finding: AuditFinding) => (
+              <article className="finding" key={finding.id}>
+                <h4><span className={`severity severity-${finding.severity}`}>{finding.severity}</span>{finding.title}</h4>
+                <p>{finding.description}</p>
+                <p className="finding-meta">{finding.wcagCriterion}{finding.filePath ? ` · ${finding.filePath}` : ''}{finding.startLine ? `:${finding.startLine}` : ''}{finding.endLine ? `–${finding.endLine}` : ''}</p>
+                {finding.selector ? <p className="finding-meta">DOM selector: <code>{finding.selector}</code></p> : null}
+                <div className="code-comparison">
+                  {finding.codeSnippet ? <div><h5>Current code</h5><pre><code>{finding.codeSnippet}</code></pre></div> : null}
+                  {finding.suggestedFixCode ? <div><h5>Muse Code suggested fix</h5><pre><code>{finding.suggestedFixCode}</code></pre></div> : null}
+                </div>
+              </article>
+            ))}
           </details>
         )) : <p>No findings were returned for this audit.</p>}
       </div>
       <div className="report-actions">
-        <button className="button button-secondary" onClick={() => void copyReport()}>Copy issue Markdown</button>
+        <button className="button button-secondary" onClick={() => void copyReport()}>Copy Formatted GitHub Issue Markdown</button>
+        {repositoryUrl ? <button className="button button-secondary" onClick={openManualIssue}>Open prefilled GitHub issue</button> : null}
         {repositoryUrl ? <button className="button button-secondary" onClick={() => void createIssue()}>Open issue with bot</button> : null}
         <button className="button button-secondary" onClick={() => void generateAudio()} disabled={audioLoading}>
           {audioLoading ? 'Generating audio…' : 'Hear screen-reader preview'}
         </button>
+        <button className="button button-secondary" onClick={() => void generateShareCard()} disabled={imageLoading}>
+          {imageLoading ? 'Generating share card…' : 'Generate share card'}
+        </button>
         <button className="button button-quiet" onClick={share}>Share audit to X</button>
       </div>
       {audioUrl ? <audio className="audio-preview" controls aria-label="Screen-reader empathy preview" src={audioUrl} /> : null}
+      {shareCard ? (
+        <figure className="share-card">
+          <img src={shareCard.dataUrl} alt={shareCard.altText} />
+          <figcaption>{shareCard.altText}</figcaption>
+          <a className="button button-secondary" href={shareCard.dataUrl} download="accessiweb-audit-card.png">Download share card</a>
+        </figure>
+      ) : null}
       {issueUrl ? <p><a href={issueUrl} target="_blank" rel="noreferrer">View the created GitHub issue</a></p> : null}
       <p className="status-message" role="status" aria-live="polite">{message}</p>
     </section>
@@ -239,6 +395,8 @@ function Workspace() {
   const [targetUrl, setTargetUrl] = useState('')
   const [targetRepoUrl, setTargetRepoUrl] = useState('')
   const [screenshotBase64, setScreenshotBase64] = useState('')
+  const [screenshotMimeType, setScreenshotMimeType] = useState('')
+  const [screenshotDataUrl, setScreenshotDataUrl] = useState('')
   const [screenshotName, setScreenshotName] = useState('')
   const [repoUrl, setRepoUrl] = useState('')
   const [result, setResult] = useState<ScanResult>()
@@ -249,6 +407,12 @@ function Workspace() {
   const [profile, setProfile] = useState<Profile>()
   const [judgeCode, setJudgeCode] = useState('')
   const [previewMessage, setPreviewMessage] = useState('')
+
+  const selectMode = (nextMode: ScanMode) => {
+    setMode(nextMode)
+    setError('')
+    setResult(undefined)
+  }
 
   useEffect(() => {
     const openPreview = () => setMode('preview')
@@ -285,7 +449,12 @@ function Workspace() {
     try {
       const endpoint = mode === 'web' ? 'scans/web' : 'scans/repo'
       const payload = mode === 'web'
-        ? { targetUrl, targetRepoUrl: targetRepoUrl || undefined, screenshotBase64: screenshotBase64 || undefined }
+        ? {
+            targetUrl,
+            targetRepoUrl: targetRepoUrl || undefined,
+            screenshotBase64: screenshotBase64 || undefined,
+            screenshotMimeType: screenshotMimeType || undefined,
+          }
         : { repoUrl }
       const response = await fetch(apiUrl(endpoint), {
         method: 'POST',
@@ -339,7 +508,7 @@ function Workspace() {
         <div>
           <p className="eyebrow">AI-assisted · Human-reviewed</p>
           <h1>Make accessibility part of every release.</h1>
-          <p className="hero-copy">The web is being built faster than ever. AccessiWeb Engine helps teams find and fix accessibility issues with Meta AI and Muse Code.</p>
+          <p className="hero-copy">In the AI era, web creation is growing exponentially. AccessiWeb Engine uses Meta AI and Muse Code to help make every website and repository accessible by default.</p>
           <a className="button button-primary" href="#scanner">Start a free audit <span aria-hidden="true">→</span></a>
         </div>
         <div className="hero-card" aria-label="Accessibility audit at a glance">
@@ -355,12 +524,22 @@ function Workspace() {
           <h2 id="scanner-heading">Start with a public audit</h2>
           <p>Scan a live page or public repository. Private autonomous remediation is available by preview access.</p>
         </div>
-        <div className="mode-switch" aria-label="Analysis experience">
-          <button type="button" aria-pressed={mode === 'web'} onClick={() => { setMode('web'); setError(''); setResult(undefined) }}>Web URL analysis</button>
-          <button type="button" aria-pressed={mode === 'repo'} onClick={() => { setMode('repo'); setError(''); setResult(undefined) }}>Repository analysis</button>
-          <button type="button" aria-pressed={mode === 'preview'} onClick={() => { setMode('preview'); setError(''); setResult(undefined) }}>Autonomous PR <span className="preview-pill">Preview</span></button>
+        <div className="mode-switch" role="tablist" aria-label="Analysis experience" onKeyDown={(event) => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+          event.preventDefault()
+          const modes: ScanMode[] = ['web', 'repo', 'preview']
+          const currentIndex = modes.indexOf(mode)
+          const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? 2
+            : (currentIndex + (event.key === 'ArrowRight' ? 1 : 2)) % 3
+          selectMode(modes[nextIndex])
+          document.getElementById(`tab-${modes[nextIndex]}`)?.focus()
+        }}>
+          <button id="tab-web" type="button" role="tab" aria-selected={mode === 'web'} aria-controls="scanner-tabpanel" tabIndex={mode === 'web' ? 0 : -1} onClick={() => selectMode('web')}>Web URL analysis</button>
+          <button id="tab-repo" type="button" role="tab" aria-selected={mode === 'repo'} aria-controls="scanner-tabpanel" tabIndex={mode === 'repo' ? 0 : -1} onClick={() => selectMode('repo')}>Repository analysis</button>
+          <button id="tab-preview" type="button" role="tab" aria-selected={mode === 'preview'} aria-controls="scanner-tabpanel" tabIndex={mode === 'preview' ? 0 : -1} onClick={() => selectMode('preview')}>Autonomous PR <span className="preview-pill">Preview</span></button>
         </div>
 
+        <div id="scanner-tabpanel" role="tabpanel" aria-labelledby={`tab-${mode}`} tabIndex={0}>
         {mode !== 'preview' ? (
           <form className="scan-form" onSubmit={(event) => void submitScan(event)}>
             <label htmlFor="scan-target">{mode === 'web' ? 'Web page URL' : 'Public GitHub repository URL'}</label>
@@ -401,6 +580,8 @@ function Workspace() {
                       const file = event.target.files?.[0]
                       if (!file) {
                         setScreenshotBase64('')
+                        setScreenshotMimeType('')
+                        setScreenshotDataUrl('')
                         setScreenshotName('')
                         return
                       }
@@ -413,6 +594,8 @@ function Workspace() {
                       reader.onload = () => {
                         const dataUrl = typeof reader.result === 'string' ? reader.result : ''
                         setScreenshotBase64(dataUrl.split(',')[1] || '')
+                        setScreenshotDataUrl(dataUrl)
+                        setScreenshotMimeType(file.type)
                         setScreenshotName(file.name)
                       }
                       reader.readAsDataURL(file)
@@ -457,7 +640,8 @@ function Workspace() {
             {previewMessage ? <p className="status-message" role="status" aria-live="polite">{previewMessage}</p> : null}
           </section>
         )}
-        {result ? <Report result={result} repositoryUrl={result.issueRepoUrl || (mode === 'repo' ? repoUrl : '')} /> : null}
+        {result ? <Report result={result} repositoryUrl={result.issueRepoUrl || (mode === 'repo' ? repoUrl : '')} screenshotDataUrl={screenshotDataUrl} /> : null}
+        </div>
       </section>
 
       <section className="rules-section" aria-labelledby="rules-heading">
@@ -493,17 +677,35 @@ function InfoPage({ pathname }: { pathname: string }) {
 
 function App() {
   const pathname = window.location.pathname.replace(/\/$/, '') || '/'
+  const [theme, setTheme] = useState<Theme>(() => {
+    try {
+      const saved = localStorage.getItem('accessiweb-theme')
+      return saved === 'light' || saved === 'dark' || saved === 'high-contrast' ? saved : 'light'
+    } catch {
+      return 'light'
+    }
+  })
+
+  const changeTheme = (nextTheme: Theme) => {
+    setTheme(nextTheme)
+    try {
+      localStorage.setItem('accessiweb-theme', nextTheme)
+    } catch {
+      return
+    }
+  }
+
   return (
-    <>
+    <div className="app-shell" data-theme={theme}>
       <a className="skip-link" href="#main-content">Skip to main content</a>
-      <Header />
+      <Header theme={theme} onThemeChange={changeTheme} />
       {pages[pathname] ? <InfoPage pathname={pathname} /> : <Workspace />}
       <footer className="site-footer">
         <a className="brand" href="/"><span className="brand-mark" aria-hidden="true">A</span><span>AccessiWeb <strong>Engine</strong></span></a>
         <p>Accessibility makes the web work better for everyone.</p>
         <nav aria-label="Footer navigation"><a href="/privacy">Privacy</a><a href="/about">About</a></nav>
       </footer>
-    </>
+    </div>
   )
 }
 
