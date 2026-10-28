@@ -118,6 +118,15 @@ test('patched source files with syntax errors are rejected', async () => {
   assert.ok(validateSourceSyntax('src/broken.css', '.card { color: red;').length > 0)
 })
 
+test('Vue and Svelte script/style blocks parse without stripping template content', () => {
+  const vue = `<template><button @click="save">Save</button></template>
+<script setup lang="ts">const save = () => true</script
+  >
+<style>.button { color: #000; }</style>`
+  assert.deepEqual(validateSourceSyntax('src/Button.vue', vue), [])
+  assert.ok(validateSourceSyntax('src/Button.vue', '<template><div></template><script>const = ;</script>').length > 0)
+})
+
 test('open-weights and image models use their configured model routes', async () => {
   const calls: Array<{ url: string; model: string }> = []
   const client = new MetaAiClient({

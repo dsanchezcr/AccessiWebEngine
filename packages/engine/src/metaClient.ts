@@ -186,6 +186,76 @@ const validateBalancedCss = (content: string): string[] => {
   return depth === 0 ? [] : ['Unclosed CSS block.']
 }
 
+const extractComponentBlocks = (
+  source: string,
+): { tagName: 'script' | 'style'; content: string; scriptExtension?: 'ts' | 'tsx' | 'js' | 'jsx'; error?: string }[] => {
+  const blocks: { tagName: 'script' | 'style'; content: string; scriptExtension?: 'ts' | 'tsx' | 'js' | 'jsx'; error?: string }[] = []
+  const lowerSource = source.toLowerCase()
+  let cursor = 0
+
+  while (cursor < source.length) {
+    const open = source.indexOf('<', cursor)
+    if (open < 0) break
+    if (source.startsWith('<!--', open)) {
+      const commentEnd = source.indexOf('-->', open + 4)
+      cursor = commentEnd < 0 ? source.length : commentEnd + 3
+      continue
+    }
+
+    const match = source.slice(open).match(/^<([a-z][\w:-]*)\b/i)
+    if (!match) {
+      cursor = open + 1
+      continue
+    }
+    const tagName = match[1].toLowerCase()
+    const startAttributes = open + match[0].length
+    let quote = ''
+    let tagEnd = startAttributes
+    for (; tagEnd < source.length; tagEnd += 1) {
+      const character = source[tagEnd]
+      if (quote) {
+        if (character === quote) quote = ''
+      } else if (character === '"' || character === "'") {
+        quote = character
+      } else if (character === '>') {
+        break
+      }
+    }
+    if (tagEnd >= source.length) break
+    cursor = tagEnd + 1
+
+    if ((tagName !== 'script' && tagName !== 'style') || source[tagEnd - 1] === '/') continue
+    const closeToken = `</${tagName}`
+    let closeStart = cursor
+    while ((closeStart = lowerSource.indexOf(closeToken, closeStart)) >= 0) {
+      const delimiter = source[closeStart + closeToken.length]
+      if (delimiter === '>' || /\s/.test(delimiter ?? '')) break
+      closeStart += closeToken.length
+    }
+    if (closeStart < 0) {
+      blocks.push({ tagName, content: '', error: `Unclosed <${tagName}> block.` })
+      break
+    }
+    const closeEnd = source.indexOf('>', closeStart + closeToken.length)
+    if (closeEnd < 0) {
+      blocks.push({ tagName, content: '', error: `Unclosed </${tagName}> tag.` })
+      break
+    }
+    const attributes = source.slice(startAttributes, tagEnd)
+    const language = attributes.match(/\blang\s*=\s*["']([^"']+)["']/i)?.[1]?.toLowerCase()
+    const scriptExtension = language === 'tsx' ? 'tsx' : language === 'jsx' ? 'jsx'
+      : language === 'js' || language === 'javascript' ? 'js'
+        : 'ts'
+    blocks.push({
+      tagName,
+      content: source.slice(cursor, closeStart),
+      ...(tagName === 'script' ? { scriptExtension } : {}),
+    })
+    cursor = closeEnd + 1
+  }
+  return blocks
+}
+
 export const validateSourceSyntax = (filePath: string, content: string): string[] => {
   const extension = filePath.split('.').pop()?.toLowerCase()
   if (['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'].includes(extension ?? '')) {
@@ -206,13 +276,20 @@ export const validateSourceSyntax = (filePath: string, content: string): string[
   if (extension === 'html' || extension === 'htm') return validateHtml(content)
   if (extension === 'css') return validateBalancedCss(content)
   if (extension === 'vue' || extension === 'svelte') {
-    const scripts = [...content.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)]
-    const templates = content
-      .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
-      .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '')
-    const errors = validateHtml(templates)
-    for (const [index, match] of scripts.entries()) {
-      errors.push(...validateSourceSyntax(`${filePath}.${index === 0 ? 'ts' : `script${index}.ts`}`, match[1]))
+    const errors: string[] = []
+    let scriptIndex = 0
+    for (const block of extractComponentBlocks(content)) {
+      if (block.error) {
+        errors.push(block.error)
+      } else if (block.tagName === 'script') {
+        errors.push(...validateSourceSyntax(
+          `${filePath}.${scriptIndex === 0 ? block.scriptExtension : `script${scriptIndex}.${block.scriptExtension}`}`,
+          block.content,
+        ))
+        scriptIndex += 1
+      } else {
+        errors.push(...validateBalancedCss(block.content))
+      }
     }
     return errors
   }
