@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { isIssueRepositoryAllowed, isPublicIp, resolvePublicAddress, validatePublicUrl } from './security.ts'
+import {
+  consumeIssueWriteQuota,
+  isIssueRepositoryAllowed,
+  isPublicIp,
+  resolvePublicAddress,
+  validatePublicUrl,
+} from './security.ts'
 
 test('public URL validation blocks private, local, and non-web destinations', async () => {
   const resolver = async (hostname: string) => hostname === 'public.example' ? ['93.184.216.34'] : ['10.0.0.5']
@@ -27,4 +33,14 @@ test('GitHub bot issue writes require an exact configured repository allowlist',
   assert.equal(isIssueRepositoryAllowed('EXAMPLE', 'SITE', 'example/site'), true)
   assert.equal(isIssueRepositoryAllowed('example', 'site-admin', 'example/site'), false)
   assert.equal(isIssueRepositoryAllowed('example', 'site', undefined), false)
+})
+
+test('GitHub bot issue creation is rate-limited per allowlisted repository', () => {
+  const owner = 'rate-limit-test'
+  const repo = 'site'
+  for (let count = 0; count < 5; count += 1) {
+    assert.equal(consumeIssueWriteQuota(owner, repo, 100_000), true)
+  }
+  assert.equal(consumeIssueWriteQuota(owner, repo, 100_000), false)
+  assert.equal(consumeIssueWriteQuota(owner, repo, 160_000), true)
 })

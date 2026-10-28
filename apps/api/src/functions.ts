@@ -6,7 +6,13 @@ import { Octokit } from '@octokit/rest'
 import type { AuditFinding, RepoFile } from '../../../packages/shared/src/types.js'
 import { MetaAiClient } from '../../../packages/engine/src/metaClient.js'
 import { collectDomBaseline } from './domBaseline.js'
-import { isIssueRepositoryAllowed, resolvePublicAddress, validatePublicUrl, verifyBearerToken } from './security.js'
+import {
+  consumeIssueWriteQuota,
+  isIssueRepositoryAllowed,
+  resolvePublicAddress,
+  validatePublicUrl,
+  verifyBearerToken,
+} from './security.js'
 import { deleteUserData, enablePreviewForUser, getOrCreateUser, saveRemediation, saveScan } from './store.js'
 
 const json = (body: unknown, status = 200): HttpResponseInit => ({
@@ -303,6 +309,9 @@ app.http('createIssue', {
       const octokit = new Octokit({ auth: token })
       const { data: repository } = await octokit.repos.get({ owner: repo.owner, repo: repo.repo })
       if (repository.private) throw new RequestError(400, 'Issues can only be created on public repositories.')
+      if (!consumeIssueWriteQuota(repo.owner, repo.repo)) {
+        throw new RequestError(429, 'Issue creation is temporarily rate-limited for this repository.')
+      }
       for (const label of ['accessibility', 'wcag-2.2', 'accessiweb-audit']) {
         try {
           await octokit.issues.createLabel({

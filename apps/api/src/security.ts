@@ -83,6 +83,34 @@ export const isIssueRepositoryAllowed = (
   return configured.split(',').some((entry) => entry.trim().toLowerCase() === requested)
 }
 
+const issueWriteWindows = new Map<string, { count: number; resetAt: number }>()
+
+export const consumeIssueWriteQuota = (
+  owner: string,
+  repo: string,
+  now = Date.now(),
+): boolean => {
+  const key = `${owner}/${repo}`.toLowerCase()
+  const window = issueWriteWindows.get(key)
+  if (!window || window.resetAt <= now) {
+    issueWriteWindows.set(key, { count: 1, resetAt: now + 60_000 })
+    if (issueWriteWindows.size > 1_000) {
+      for (const [repoKey, state] of issueWriteWindows) {
+        if (state.resetAt <= now) issueWriteWindows.delete(repoKey)
+      }
+    }
+    return true
+  }
+  if (window.count >= 5) return false
+  window.count += 1
+  if (issueWriteWindows.size > 1_000) {
+    for (const [repoKey, state] of issueWriteWindows) {
+      if (state.resetAt <= now) issueWriteWindows.delete(repoKey)
+    }
+  }
+  return true
+}
+
 export const validatePublicUrl = async (
   value: string,
   resolver: (hostname: string) => Promise<string[]> = resolveAddresses,

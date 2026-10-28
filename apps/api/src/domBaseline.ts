@@ -1,9 +1,39 @@
 const exactAttributeValue = (tag: string, name: string): string | undefined => {
-  const attribute = new RegExp(
-    `(?:^|\\s)${name}(?:\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\\x60]+)))?(?=\\s|/?>|$)`,
-    'i',
-  ).exec(tag)
-  return attribute ? attribute[1] ?? attribute[2] ?? attribute[3] ?? '' : undefined
+  const tagName = tag.match(/^<[^\s/>]+/)?.[0]
+  if (!tagName) return undefined
+  let cursor = tagName.length
+
+  while (cursor < tag.length) {
+    while (/\s/.test(tag[cursor] ?? '')) cursor += 1
+    if (tag[cursor] === '/' || tag[cursor] === '>') break
+    const nameStart = cursor
+    while (cursor < tag.length && !/[\s=/>]/.test(tag[cursor])) cursor += 1
+    if (cursor === nameStart) {
+      cursor += 1
+      continue
+    }
+    const attributeName = tag.slice(nameStart, cursor).toLowerCase()
+    while (/\s/.test(tag[cursor] ?? '')) cursor += 1
+    let value = ''
+    if (tag[cursor] === '=') {
+      cursor += 1
+      while (/\s/.test(tag[cursor] ?? '')) cursor += 1
+      const quote = tag[cursor] === '"' || tag[cursor] === "'" ? tag[cursor] : ''
+      if (quote) {
+        cursor += 1
+        const valueStart = cursor
+        while (cursor < tag.length && tag[cursor] !== quote) cursor += 1
+        value = tag.slice(valueStart, cursor)
+        if (tag[cursor] === quote) cursor += 1
+      } else {
+        const valueStart = cursor
+        while (cursor < tag.length && !/[\s>]/.test(tag[cursor])) cursor += 1
+        value = tag.slice(valueStart, cursor)
+      }
+    }
+    if (attributeName === name.toLowerCase()) return value
+  }
+  return undefined
 }
 
 const startTags = (html: string, name: string): string[] => {

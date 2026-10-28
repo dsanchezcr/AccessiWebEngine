@@ -37,3 +37,14 @@ test('data attributes are not mistaken for accessibility attributes', () => {
   assert.equal(baseline.checks.controlsWithAccessibleLabel, 0)
   assert.equal(baseline.checks.landmarkCount, 0)
 })
+
+test('attribute-like text inside quoted values is not parsed as an attribute', () => {
+  const baseline = collectDomBaseline(`
+    <html title="lang='en'"><main><img title="alt='logo'">
+    <input title="aria-label='Search'"></main></html>
+  `)
+
+  assert.equal(baseline.checks.pageLanguagePresent, false)
+  assert.equal(baseline.checks.imagesWithoutAlt, 1)
+  assert.equal(baseline.checks.controlsWithAccessibleLabel, 0)
+})
