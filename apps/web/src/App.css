@@ -4,7 +4,7 @@
 .site-header { max-width: 1240px; min-height: 82px; margin: 0 auto; padding: 1rem 2rem; display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; }
 .auth-actions { display: flex; align-items: center; gap: 0.25rem; }
 .theme-control { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--muted); font-size: 0.78rem; font-weight: 700; }
-.theme-control select { min-height: 40px; padding: 0.4rem 0.55rem; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: 7px; }
+.theme-control select, .optional-repo select { min-height: 40px; padding: 0.4rem 0.55rem; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: 7px; }
 .brand { display: inline-flex; align-items: center; gap: 0.65rem; color: var(--ink); text-decoration: none; font-weight: 600; white-space: nowrap; }
 .brand strong { font-family: Manrope, sans-serif; font-weight: 800; }
 .brand-mark { display: grid; place-items: center; width: 36px; height: 36px; color: #fff; background: var(--green); border-radius: 11px; font-family: Manrope, sans-serif; font-size: 1.1rem; font-weight: 800; }
@@ -93,6 +93,8 @@ input::placeholder { color: #637a70; opacity: 1; }
 pre { max-width: 100%; overflow-x: auto; padding: 0.85rem; background: #12231f; color: #e6f3eb; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .report-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1.2rem; }
 .audio-preview { display: block; width: min(100%, 520px); margin-top: 1rem; }
+.audio-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-top: 1rem; }
+.audio-comparison h3 { margin: 0.75rem 0 0; font-size: 0.95rem; }
 .share-card { max-width: 520px; margin: 1rem 0; }
 .share-card img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 9px; }
 .share-card figcaption { margin: 0.4rem 0 0.8rem; color: var(--muted); font-size: 0.85rem; }
@@ -140,7 +142,7 @@ pre { max-width: 100%; overflow-x: auto; padding: 0.85rem; background: #12231f; 
   .walkthrough { flex-direction: column; }
   .site-footer { flex-wrap: wrap; padding: 1.4rem 1rem; }
   .site-footer p { flex-basis: 100%; order: 2; }
-  .code-comparison { grid-template-columns: 1fr; }
+  .code-comparison, .audio-comparison { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 480px) {

@@ -5,6 +5,7 @@ import { app, type HttpRequest, type HttpResponseInit, type InvocationContext } 
 import { Octokit } from '@octokit/rest'
 import type { AuditFinding, RepoFile } from '../../../packages/shared/src/types.js'
 import { MetaAiClient } from '../../../packages/engine/src/metaClient.js'
+import { collectDomBaseline } from './domBaseline.js'
 import { resolvePublicAddress, validatePublicUrl, verifyBearerToken } from './security.js'
 import { deleteUserData, enablePreviewForUser, getOrCreateUser, saveRemediation, saveScan } from './store.js'
 
@@ -224,6 +225,7 @@ app.http('webScan', {
         targetRepoUrl?: unknown
         screenshotBase64?: unknown
         screenshotMimeType?: unknown
+        viewport?: unknown
       }>(request)
       const targetUrl = ensureString(body.targetUrl, 'targetUrl')
       const issueRepo = typeof body.targetRepoUrl === 'string' && body.targetRepoUrl.trim()
@@ -231,6 +233,10 @@ app.http('webScan', {
         : undefined
       const screenshotBase64 = typeof body.screenshotBase64 === 'string' ? body.screenshotBase64 : ''
       const screenshotMimeType = typeof body.screenshotMimeType === 'string' ? body.screenshotMimeType : 'image/png'
+      const viewport = body.viewport === undefined ? 'desktop' : body.viewport
+      if (viewport !== 'desktop' && viewport !== 'mobile') {
+        throw new RequestError(400, 'viewport must be desktop or mobile.')
+      }
       if (
         screenshotBase64.length > 8_000_000 ||
         (screenshotBase64 && (!/^[A-Za-z0-9+/]+={0,2}$/.test(screenshotBase64) ||
@@ -242,7 +248,13 @@ app.http('webScan', {
       const screenshotDataUrl = screenshotBase64
         ? `data:${screenshotMimeType};base64,${screenshotBase64}`
         : ''
-      const report = await meta().analyzeWebDomAndVisuals(targetUrl, html, screenshotDataUrl, {})
+      const report = await meta().analyzeWebDomAndVisuals(
+        targetUrl,
+        html,
+        screenshotDataUrl,
+        collectDomBaseline(html),
+        viewport,
+      )
       const scanId = await saveScan('WEB_URL', targetUrl, report, await optionalScanOwner(request))
       return json({ scanId, report, ...(issueRepo ? { issueRepoUrl: issueRepo.url } : {}) })
     } catch (error) {
@@ -500,7 +512,7 @@ app.http('remediatePullRequest', {
         '',
         `Repository: ${repo.url}`,
         `Baseline score: ${audit.score}/100`,
-        `Estimated score after remediation: ${plan.estimatedScoreAfter ?? 'Requires a follow-up audit'}`,
+        `Estimated score after remediation: ${plan.estimatedScoreAfter === undefined ? 'Requires a follow-up audit' : `${plan.estimatedScoreAfter}/100 (not verified by a follow-up scan)`}`,
         '',
         '## Executive summary',
         '',
@@ -524,7 +536,9 @@ app.http('remediatePullRequest', {
         '',
         '## WCAG 2.2 AA/AAA checklist',
         '',
-        ...[...new Set(audit.findings.map((finding) => finding.wcagCriterion))].map((criterion) => `- [x] ${criterion}`),
+        ...[...new Set(audit.findings.map((finding) => finding.wcagCriterion))].map((criterion) =>
+          `- [ ] ${criterion} — patch proposed; verify manually and re-scan.`,
+        ),
         '- [ ] Perform manual keyboard, screen-reader, and visual verification before merging.',
       ].join('\n')
       const entries = await Promise.all(patches.map(async (patch) => {

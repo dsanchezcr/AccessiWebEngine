@@ -13,11 +13,12 @@ const apiUrl = (path: string) => `${apiBase}/v1/${path}`
 
 const rules: Array<[string, string]> = [
   ['Perceivable — text alternatives', '1.1.1 Non-text Content: useful alternatives for images and other non-text content.'],
-  ['Perceivable — adaptable structure', '1.3.1 Info and Relationships; 1.3.2 Meaningful Sequence; 1.3.3 Sensory Characteristics.'],
-  ['Perceivable — presentation', '1.4.1 Use of Color; 1.4.3 Contrast (Minimum, 4.5:1); 1.4.4 Resize Text; 1.4.10 Reflow; 1.4.11 Non-text Contrast; 1.4.12 Text Spacing; 1.4.13 Content on Hover or Focus.'],
-  ['Operable — keyboard and timing', '2.1.1 Keyboard; 2.1.2 No Keyboard Trap; 2.1.4 Character Key Shortcuts; 2.2.1 Timing Adjustable; 2.2.2 Pause, Stop, Hide.'],
-  ['Operable — navigation and focus', '2.4.1 Bypass Blocks; 2.4.2 Page Titled; 2.4.3 Focus Order; 2.4.6 Headings and Labels; 2.4.7 Focus Visible; 2.4.11 Focus Not Obscured.'],
-  ['Operable — input modalities', '2.5.1 Pointer Gestures; 2.5.2 Pointer Cancellation; 2.5.3 Label in Name; 2.5.4 Motion Actuation; 2.5.7 Dragging Movements; 2.5.8 Target Size (Minimum, 24 × 24 CSS pixels).'],
+  ['Perceivable — media alternatives', '1.2.1 Audio-only and Video-only (Prerecorded); 1.2.2 Captions (Prerecorded); 1.2.3 Audio Description or Media Alternative (Prerecorded).'],
+  ['Perceivable — adaptable structure', '1.3.1 Info and Relationships; 1.3.2 Meaningful Sequence; 1.3.3 Sensory Characteristics; 1.3.4 Orientation; 1.3.5 Identify Input Purpose.'],
+  ['Perceivable — presentation', '1.4.1 Use of Color; 1.4.3 Contrast (Minimum, 4.5:1); 1.4.4 Resize Text; 1.4.5 Images of Text; 1.4.10 Reflow; 1.4.11 Non-text Contrast; 1.4.12 Text Spacing; 1.4.13 Content on Hover or Focus.'],
+  ['Operable — keyboard and timing', '2.1.1 Keyboard; 2.1.2 No Keyboard Trap; 2.1.4 Character Key Shortcuts; 2.2.1 Timing Adjustable; 2.2.2 Pause, Stop, Hide; 2.3.1 Three Flashes or Below Threshold.'],
+  ['Operable — navigation and focus', '2.4.1 Bypass Blocks; 2.4.2 Page Titled; 2.4.3 Focus Order; 2.4.5 Multiple Ways; 2.4.6 Headings and Labels; 2.4.7 Focus Visible; 2.4.11 Focus Not Obscured.'],
+  ['Operable — input modalities', '2.5.1 Pointer Gestures; 2.5.2 Pointer Cancellation; 2.5.3 Label in Name; 2.5.4 Motion Actuation; 2.5.6 Concurrent Input Mechanisms; 2.5.7 Dragging Movements; 2.5.8 Target Size (Minimum, 24 × 24 CSS pixels).'],
   ['Understandable — language and predictability', '3.1.1 Language of Page; 3.1.2 Language of Parts; 3.2.1 On Focus; 3.2.2 On Input; 3.2.3 Consistent Navigation; 3.2.4 Consistent Identification.'],
   ['Understandable — forms and errors', '3.3.1 Error Identification; 3.3.2 Labels or Instructions; 3.3.3 Error Suggestion; 3.3.4 Error Prevention (Legal, Financial, Data).'],
   ['Robust — compatibility', '4.1.2 Name, Role, Value; 4.1.3 Status Messages.'],
@@ -27,7 +28,7 @@ const rules: Array<[string, string]> = [
 const pages: Record<string, { title: string; intro: string; sections: Array<[string, string]> }> = {
   '/what-we-scan': {
     title: 'What we scan',
-    intro: 'AccessiWeb combines source-level checks with an AI-assisted review of rendered page structure to surface actionable WCAG 2.2 issues.',
+    intro: 'AccessiWeb considers more than 50 WCAG 2.2 Level A, AA, and AAA criteria through AI-assisted review of page structure, source, and optional screenshots. Findings need human review.',
     sections: [
       ['Visual & layout · SAM 3.1', rules[2][1]],
       ['Targets & focus · SAM 3.1', `${rules[4][1]} ${rules[5][1]} ${rules[9][1]}`],
@@ -41,10 +42,10 @@ const pages: Record<string, { title: string; intro: string; sections: Array<[str
     title: 'How it works',
     intro: 'Audits follow a transparent pipeline. Meta models assist with analysis and proposed changes; repository writes are gated and reviewed through a pull request.',
     sections: [
-      ['1. Ingest', 'A public URL or public GitHub repository is validated and its relevant markup is processed in memory.'],
-      ['2. Audit', 'Muse Code returns structured findings, with SAM 3.1 screenshot segmentation and optional Muse Spark Open routing.'],
+      ['1. Ingest', 'Azure Functions validate a public URL or GitHub repository. Page markup and repository files are processed in memory.'],
+      ['2. Audit', 'Muse Code returns structured findings; SAM 3.1 can segment user-provided screenshots. Audits can route to Muse Spark Open through a configured partner endpoint.'],
       ['3. Remediate & verify', 'For enabled preview accounts, Muse Code proposes complete file patches and verification notes.'],
-      ['4. Submit', 'The GitHub integration creates a branch and pull request. A maintainer can inspect every change before merging.'],
+      ['4. Submit', 'GitHub Octokit creates a branch and pull request; Cosmos DB stores job/report data. Azure Static Web Apps serves the accessible React workspace. A maintainer reviews changes before merging.'],
     ],
   },
   '/privacy': {
@@ -53,7 +54,7 @@ const pages: Record<string, { title: string; intro: string; sections: Array<[str
     sections: [
       ['Data handling', 'Scan reports and line references are stored in Cosmos DB. Raw HTML and repository file contents are not saved. Signed-in scans can be removed with the account deletion request.'],
       ['Authentication', 'Preview APIs validate Entra ID B2C bearer tokens and require both a global feature switch and a per-user feature flag.'],
-      ['Credentials', 'Meta, GitHub and Cosmos credentials are read from server-side environment configuration. Never put secrets in Vite environment variables.'],
+      ['Credentials & encryption', 'Identity bearer tokens are validated by the API and are not stored. Configure HTTPS/TLS for service calls; Cosmos DB encrypts persisted data at rest. Meta, GitHub, and Cosmos credentials remain server-side—never put secrets in Vite environment variables.'],
       ['Retention', 'Use DELETE /api/v1/users/me/data to delete your account, its associated scans, and remediation records. Apply your deployment’s retention policy for anonymous scans.'],
     ],
   },
@@ -142,14 +143,17 @@ function Report({
 }) {
   const [message, setMessage] = useState('')
   const [issueUrl, setIssueUrl] = useState('')
-  const [audioUrl, setAudioUrl] = useState('')
+  const [audioUrls, setAudioUrls] = useState<{ unpatched: string; remediated: string }>()
   const [audioLoading, setAudioLoading] = useState(false)
   const [shareCard, setShareCard] = useState<{ dataUrl: string; altText: string }>()
   const [imageLoading, setImageLoading] = useState(false)
   const [screenshotDimensions, setScreenshotDimensions] = useState<{ width: number; height: number }>()
   useEffect(() => () => {
-    if (audioUrl) URL.revokeObjectURL(audioUrl)
-  }, [audioUrl])
+    if (audioUrls) {
+      URL.revokeObjectURL(audioUrls.unpatched)
+      URL.revokeObjectURL(audioUrls.remediated)
+    }
+  }, [audioUrls])
   const report = result.report
   const findings = report.findings ?? []
   const markdown = [
@@ -227,7 +231,11 @@ function Report({
     setAudioLoading(true)
     setMessage('')
     try {
-      const preview = await apiRequest<{ audioBase64: string; mimeType: string }>(
+      const preview = await apiRequest<{
+        unpatchedAudioBase64: string
+        remediatedAudioBase64: string
+        mimeType: string
+      }>(
         'scans/audio-preview',
         undefined,
         { method: 'POST', body: JSON.stringify({ auditSummary: report.summary }) },
@@ -235,11 +243,23 @@ function Report({
       const mimeType = ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm', 'audio/mp4'].includes(preview.mimeType)
         ? preview.mimeType
         : ''
-      if (!mimeType || preview.audioBase64.length > 20_000_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(preview.audioBase64)) {
+      if (
+        !mimeType ||
+        preview.unpatchedAudioBase64.length > 20_000_000 ||
+        preview.remediatedAudioBase64.length > 20_000_000 ||
+        !/^[A-Za-z0-9+/]+={0,2}$/.test(preview.unpatchedAudioBase64) ||
+        !/^[A-Za-z0-9+/]+={0,2}$/.test(preview.remediatedAudioBase64)
+      ) {
         throw new Error('The audio service returned an unsupported preview.')
       }
-      const bytes = Uint8Array.from(atob(preview.audioBase64), (character) => character.charCodeAt(0))
-      setAudioUrl(URL.createObjectURL(new Blob([bytes], { type: mimeType })))
+      const toObjectUrl = (base64: string) => {
+        const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0))
+        return URL.createObjectURL(new Blob([bytes], { type: mimeType }))
+      }
+      setAudioUrls({
+        unpatched: toObjectUrl(preview.unpatchedAudioBase64),
+        remediated: toObjectUrl(preview.remediatedAudioBase64),
+      })
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Audio preview generation failed.')
     } finally {
@@ -376,7 +396,12 @@ function Report({
         </button>
         <button className="button button-quiet" onClick={share}>Share audit to X</button>
       </div>
-      {audioUrl ? <audio className="audio-preview" controls aria-label="Screen-reader empathy preview" src={audioUrl} /> : null}
+      {audioUrls ? (
+        <div className="audio-comparison" aria-label="Before and after screen-reader audio comparison">
+          <div><h3>Before remediation</h3><audio className="audio-preview" controls aria-label="Unpatched screen-reader experience" src={audioUrls.unpatched} /></div>
+          <div><h3>After remediation</h3><audio className="audio-preview" controls aria-label="Remediated screen-reader experience" src={audioUrls.remediated} /></div>
+        </div>
+      ) : null}
       {shareCard ? (
         <figure className="share-card">
           <img src={shareCard.dataUrl} alt={shareCard.altText} />
@@ -393,6 +418,7 @@ function Report({
 function Workspace() {
   const [mode, setMode] = useState<ScanMode>('web')
   const [targetUrl, setTargetUrl] = useState('')
+  const [viewport, setViewport] = useState<'desktop' | 'mobile'>('desktop')
   const [targetRepoUrl, setTargetRepoUrl] = useState('')
   const [screenshotBase64, setScreenshotBase64] = useState('')
   const [screenshotMimeType, setScreenshotMimeType] = useState('')
@@ -451,6 +477,7 @@ function Workspace() {
       const payload = mode === 'web'
         ? {
             targetUrl,
+            viewport,
             targetRepoUrl: targetRepoUrl || undefined,
             screenshotBase64: screenshotBase64 || undefined,
             screenshotMimeType: screenshotMimeType || undefined,
@@ -511,11 +538,11 @@ function Workspace() {
           <p className="hero-copy">In the AI era, web creation is growing exponentially. AccessiWeb Engine uses Meta AI and Muse Code to help make every website and repository accessible by default.</p>
           <a className="button button-primary" href="#scanner">Start a free audit <span aria-hidden="true">→</span></a>
         </div>
-        <div className="hero-card" aria-label="Accessibility audit at a glance">
+        <aside className="hero-card" aria-label="Accessibility audit at a glance">
           <div className="orbit" aria-hidden="true"><span>WCAG<br />2.2</span></div>
           <p>Access for everyone,<br /><strong>built in by default.</strong></p>
           <div className="hero-chip"><span aria-hidden="true">✓</span> Reviewable fixes</div>
-        </div>
+        </aside>
       </section>
 
       <section className="scanner-panel" id="scanner" aria-labelledby="scanner-heading">
@@ -560,6 +587,13 @@ function Workspace() {
             {mode === 'web' ? (
               <div className="optional-fields">
                 <div className="optional-repo">
+                  <label htmlFor="scan-viewport">Viewport</label>
+                  <select id="scan-viewport" value={viewport} onChange={(event) => setViewport(event.target.value as 'desktop' | 'mobile')}>
+                    <option value="desktop">Desktop</option>
+                    <option value="mobile">Mobile</option>
+                  </select>
+                </div>
+                <div className="optional-repo">
                   <label htmlFor="issue-repository">Optional GitHub repository for issue creation</label>
                   <input
                     id="issue-repository"
@@ -585,8 +619,17 @@ function Workspace() {
                         setScreenshotName('')
                         return
                       }
+                      setScreenshotBase64('')
+                      setScreenshotMimeType('')
+                      setScreenshotDataUrl('')
+                      setScreenshotName('')
                       if (file.size > 6_000_000) {
                         setError('Choose an image smaller than 6 MB.')
+                        event.target.value = ''
+                        return
+                      }
+                      if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+                        setError('Choose a PNG, JPEG, or WebP screenshot.')
                         event.target.value = ''
                         return
                       }
@@ -598,6 +641,7 @@ function Workspace() {
                         setScreenshotMimeType(file.type)
                         setScreenshotName(file.name)
                       }
+                      reader.onerror = () => setError('The screenshot could not be read.')
                       reader.readAsDataURL(file)
                     }}
                   />

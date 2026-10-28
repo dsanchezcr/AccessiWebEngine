@@ -146,3 +146,42 @@ test('open-weights and image models use their configured model routes', async ()
   assert.equal(calls[1].model, 'muse-image-test')
   assert.equal(image.mimeType, 'image/png')
 })
+
+test('web analysis sends the screenshot as a multimodal image and includes viewport context', async () => {
+  const requests: Array<{ model: string; messages: Array<{ content: unknown }> }> = []
+  const client = new MetaAiClient({
+    apiKey: 'test-key',
+    baseUrl: 'https://meta.example/v1',
+    fetcher: async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        model: string
+        messages: Array<{ content: unknown }>
+      }
+      requests.push(request)
+      return request.model === 'sam-3.1'
+        ? response({ segments: [] })
+        : response({
+            summary: 'Audit complete.',
+            score: 100,
+            findings: [],
+            categoryScores: { perceivable: 100, operable: 100, understandable: 100, robust: 100 },
+          })
+    },
+  })
+
+  await client.analyzeWebDomAndVisuals(
+    'https://example.com',
+    '<main></main>',
+    'data:image/webp;base64,aW1hZ2U=',
+    { imageCount: 0 },
+    'mobile',
+  )
+
+  const samMessage = requests[0].messages[1].content as Array<{ type: string; image_url?: { url: string } }>
+  const museMessage = requests[1].messages[1].content as string
+  assert.equal(requests[0].model, 'sam-3.1')
+  assert.equal(samMessage[1].type, 'image_url')
+  assert.equal(samMessage[1].image_url?.url, 'data:image/webp;base64,aW1hZ2U=')
+  assert.match(museMessage, /"viewport":"mobile"/)
+  assert.equal(requests[1].model, 'muse-code')
+})
