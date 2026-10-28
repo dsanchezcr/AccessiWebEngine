@@ -1,0 +1,15 @@
+{
+  "name": "accessiweb-engine",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace apps/web",
+    "start:api": "npm run start --workspace apps/api",
+    "build": "npm run build --workspace apps/api && npm run build --workspace apps/web",
+    "typecheck": "npm run typecheck --workspace apps/web && npm run typecheck --workspace apps/api",
+    "test": "node --experimental-strip-types --test packages/engine/src/metaClient.test.ts apps/api/src/security.test.ts"
+  }
+}

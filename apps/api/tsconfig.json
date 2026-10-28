@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "rootDir": "../..",
+    "outDir": "dist",
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "../../packages/engine/src/**/*.ts", "../../packages/shared/src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "../../packages/**/src/**/*.test.ts"]
+}
