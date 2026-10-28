@@ -1,26 +1,53 @@
-export const collectDomBaseline = (html: string) => {
-  const images = [...html.matchAll(/<img\b[^>]*>/gi)].map(([image]) => image)
-  const controls = [...html.matchAll(/<(?:input|select|textarea)\b[^>]*>/gi)].map(([control]) => control)
-  const headings = [...html.matchAll(/<h([1-6])\b/gi)].map((match) => Number(match[1]))
-  const labelledIds = new Set(
-    [...html.matchAll(/<label\b[^>]*\bfor\s*=\s*["']([^"']+)["']/gi)].map((match) => match[1]),
+const exactAttributeValue = (tag: string, name: string): string | undefined => {
+  const attribute = new RegExp(
+    `(?:^|\\s)${name}(?:\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\\x60]+)))?(?=\\s|/?>|$)`,
+    'i',
+  ).exec(tag)
+  return attribute ? attribute[1] ?? attribute[2] ?? attribute[3] ?? '' : undefined
+}
+
+const startTags = (html: string, name: string): string[] => {
+  const tagPattern = new RegExp(
+    `<${name}(?=\\s|/|>)(?:"[^"]*"|'[^']*'|[^'">])*?>`,
+    'gi',
   )
-  const htmlTag = html.match(/<html\b[^>]*>/i)?.[0] ?? ''
+  return [...html.matchAll(tagPattern)].map(([tag]) => tag)
+}
+
+const allStartTags = (html: string): string[] => [
+  ...html.matchAll(/<[a-z][\w:-]*(?:"[^"]*"|'[^']*'|[^'">])*?>/gi),
+].map(([tag]) => tag)
+
+export const collectDomBaseline = (html: string) => {
+  const images = startTags(html, 'img')
+  const controls = ['input', 'select', 'textarea'].flatMap((name) => startTags(html, name))
+  const headings = [1, 2, 3, 4, 5, 6].flatMap((level) =>
+    startTags(html, `h${level}`).map(() => level),
+  )
+  const tags = allStartTags(html)
+  const labelledIds = new Set(
+    startTags(html, 'label').map((label) => exactAttributeValue(label, 'for')).filter(Boolean),
+  )
+  const htmlTag = startTags(html, 'html')[0] ?? ''
   return {
     checks: {
-      pageLanguagePresent: /\blang\s*=/i.test(htmlTag),
+      pageLanguagePresent: Boolean(exactAttributeValue(htmlTag, 'lang')),
       imageCount: images.length,
-      imagesWithoutAlt: images.filter((image) => !/\balt\s*=/i.test(image)).length,
+      imagesWithoutAlt: images.filter((image) => exactAttributeValue(image, 'alt') === undefined).length,
       formControlCount: controls.length,
       controlsWithAccessibleLabel: controls.filter((control) =>
-        /\b(?:aria-label|aria-labelledby)\s*=/i.test(control) ||
-        labelledIds.has(control.match(/\bid\s*=\s*["']([^"']+)/i)?.[1] ?? ''),
+        Boolean(exactAttributeValue(control, 'aria-label')?.trim()) ||
+        Boolean(exactAttributeValue(control, 'aria-labelledby')?.trim()) ||
+        labelledIds.has(exactAttributeValue(control, 'id') ?? ''),
       ).length,
       headingLevels: headings,
       headingOrderSkips: headings.slice(1).filter((level, index) => level > headings[index] + 1).length,
-      landmarkCount: (html.match(/<(?:main|nav|header|footer|aside|section)\b/gi) ?? []).length,
-      nonEmptyAltCount: images.filter((image) => /\balt\s*=\s*["'][^"']+/i.test(image)).length,
-      inlineClickHandlerCount: (html.match(/\bonclick\s*=/gi) ?? []).length,
+      landmarkCount: tags.filter((tag) =>
+        ['main', 'nav', 'header', 'footer', 'aside', 'section']
+          .includes(tag.match(/^<([a-z]+)/i)?.[1]?.toLowerCase() ?? ''),
+      ).length,
+      nonEmptyAltCount: images.filter((image) => Boolean(exactAttributeValue(image, 'alt')?.trim())).length,
+      inlineClickHandlerCount: tags.filter((tag) => exactAttributeValue(tag, 'onclick') !== undefined).length,
     },
     note: 'Static source baseline only; this fetcher does not execute page scripts or claim an axe-core scan.',
   }

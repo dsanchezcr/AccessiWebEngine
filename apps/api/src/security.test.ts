@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { isPublicIp, resolvePublicAddress, validatePublicUrl } from './security.ts'
+import { isIssueRepositoryAllowed, isPublicIp, resolvePublicAddress, validatePublicUrl } from './security.ts'
 
 test('public URL validation blocks private, local, and non-web destinations', async () => {
   const resolver = async (hostname: string) => hostname === 'public.example' ? ['93.184.216.34'] : ['10.0.0.5']
@@ -20,4 +20,11 @@ test('IP checks reject special-purpose IPv4 and IPv6 addresses', () => {
   }
   assert.equal(isPublicIp('93.184.216.34'), true)
   assert.equal(isPublicIp('2606:4700:4700::1111'), true)
+})
+
+test('GitHub bot issue writes require an exact configured repository allowlist', () => {
+  assert.equal(isIssueRepositoryAllowed('example', 'site', 'example/site,other/project'), true)
+  assert.equal(isIssueRepositoryAllowed('EXAMPLE', 'SITE', 'example/site'), true)
+  assert.equal(isIssueRepositoryAllowed('example', 'site-admin', 'example/site'), false)
+  assert.equal(isIssueRepositoryAllowed('example', 'site', undefined), false)
 })

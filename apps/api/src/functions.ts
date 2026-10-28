@@ -6,7 +6,7 @@ import { Octokit } from '@octokit/rest'
 import type { AuditFinding, RepoFile } from '../../../packages/shared/src/types.js'
 import { MetaAiClient } from '../../../packages/engine/src/metaClient.js'
 import { collectDomBaseline } from './domBaseline.js'
-import { resolvePublicAddress, validatePublicUrl, verifyBearerToken } from './security.js'
+import { isIssueRepositoryAllowed, resolvePublicAddress, validatePublicUrl, verifyBearerToken } from './security.js'
 import { deleteUserData, enablePreviewForUser, getOrCreateUser, saveRemediation, saveScan } from './store.js'
 
 const json = (body: unknown, status = 200): HttpResponseInit => ({
@@ -290,6 +290,9 @@ app.http('createIssue', {
     try {
       const body = await bodyOf<{ repoUrl?: unknown; title?: unknown; body?: unknown }>(request)
       const repo = parseRepoUrl(ensureString(body.repoUrl, 'repoUrl'))
+      if (!isIssueRepositoryAllowed(repo.owner, repo.repo)) {
+        throw new RequestError(403, 'The bot is not enabled for this repository. Open a manual issue instead.')
+      }
       const title = ensureString(body.title, 'title')
       const issueBody = ensureString(body.body, 'body')
       if (title.length > 200 || issueBody.length > 60_000) {

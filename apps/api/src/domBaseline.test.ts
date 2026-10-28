@@ -24,3 +24,16 @@ test('static DOM baseline reports language, labels, images, headings, and click 
   })
   assert.match(baseline.note, /does not execute page scripts/)
 })
+
+test('data attributes are not mistaken for accessibility attributes', () => {
+  const baseline = collectDomBaseline(`
+    <html data-lang="en"><mainland><img data-alt="logo">
+    <label data-for="query">Search</label><input id="query" data-aria-label="query">
+    </mainland></html>
+  `)
+
+  assert.equal(baseline.checks.pageLanguagePresent, false)
+  assert.equal(baseline.checks.imagesWithoutAlt, 1)
+  assert.equal(baseline.checks.controlsWithAccessibleLabel, 0)
+  assert.equal(baseline.checks.landmarkCount, 0)
+})

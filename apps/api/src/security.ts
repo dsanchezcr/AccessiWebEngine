@@ -73,6 +73,16 @@ export const resolvePublicAddress = async (
   return addresses[0]
 }
 
+export const isIssueRepositoryAllowed = (
+  owner: string,
+  repo: string,
+  configured: string | undefined = process.env.GITHUB_ISSUE_ALLOWED_REPOSITORIES,
+): boolean => {
+  if (!configured) return false
+  const requested = `${owner}/${repo}`.toLowerCase()
+  return configured.split(',').some((entry) => entry.trim().toLowerCase() === requested)
+}
+
 export const validatePublicUrl = async (
   value: string,
   resolver: (hostname: string) => Promise<string[]> = resolveAddresses,
