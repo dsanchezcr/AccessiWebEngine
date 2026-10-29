@@ -1,6 +1,7 @@
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { isIP, type LookupFunction } from 'node:net'
+import { createHash } from 'node:crypto'
 import { app, type HttpRequest, type HttpResponseInit, type InvocationContext } from '@azure/functions'
 import { Octokit } from '@octokit/rest'
 import type { AuditFinding, RepoFile } from '../../../packages/shared/src/types.js'
@@ -13,7 +14,15 @@ import {
   validatePublicUrl,
   verifyBearerToken,
 } from './security.js'
-import { deleteUserData, enablePreviewForUser, getOrCreateUser, saveRemediation, saveScan } from './store.js'
+import {
+  consumeRateLimit,
+  deleteUserData,
+  enablePreviewForUser,
+  getOrCreateUser,
+  saveRemediation,
+  saveScan,
+} from './store.js'
+import { canActivatePreview, getPreviewInviteCode } from './previewAccess.js'
 
 const json = (body: unknown, status = 200): HttpResponseInit => ({
   status,
@@ -62,6 +71,17 @@ const optionalScanOwner = async (request: HttpRequest): Promise<string | undefin
   const authorization = request.headers.get('authorization')
   if (!authorization) return undefined
   return (await requestUser(request)).entraOid
+}
+
+const consumeScanQuota = async (request: HttpRequest, owner?: string): Promise<void> => {
+  const limitKey = owner
+    ? `user:${owner}`
+    : `ip:${createHash('sha256')
+      .update(request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown')
+      .digest('hex')}`
+  if (!await consumeRateLimit(limitKey, owner ? 30 : 10)) {
+    throw new RequestError(429, 'The scan limit for this account or address has been reached.')
+  }
 }
 
 const requirePreview = async (request: HttpRequest) => {
@@ -233,6 +253,8 @@ app.http('webScan', {
         screenshotMimeType?: unknown
         viewport?: unknown
       }>(request)
+      const scanOwner = await optionalScanOwner(request)
+      await consumeScanQuota(request, scanOwner)
       const targetUrl = ensureString(body.targetUrl, 'targetUrl')
       const issueRepo = typeof body.targetRepoUrl === 'string' && body.targetRepoUrl.trim()
         ? parseRepoUrl(body.targetRepoUrl.trim())
@@ -261,7 +283,7 @@ app.http('webScan', {
         collectDomBaseline(html),
         viewport,
       )
-      const scanId = await saveScan('WEB_URL', targetUrl, report, await optionalScanOwner(request))
+      const scanId = await saveScan('WEB_URL', targetUrl, report, scanOwner)
       return json({ scanId, report, ...(issueRepo ? { issueRepoUrl: issueRepo.url } : {}) })
     } catch (error) {
       return fail(error, context)
@@ -276,11 +298,13 @@ app.http('repositoryScan', {
   handler: async (request, context) => {
     try {
       const body = await bodyOf<{ repoUrl?: unknown; branch?: unknown }>(request)
+      const scanOwner = await optionalScanOwner(request)
+      await consumeScanQuota(request, scanOwner)
       const repo = parseRepoUrl(ensureString(body.repoUrl, 'repoUrl'))
       const branch = typeof body.branch === 'string' ? body.branch : undefined
       const { files } = await getRepoFiles(new Octokit(), repo.owner, repo.repo, branch)
       const report = await meta().analyzeRepositorySource(repo.url, files)
-      const scanId = await saveScan('SOURCE_CODE', repo.url, report, await optionalScanOwner(request))
+      const scanId = await saveScan('SOURCE_CODE', repo.url, report, scanOwner)
       return json({ scanId, report })
     } catch (error) {
       return fail(error, context)
@@ -402,28 +426,35 @@ app.http('deleteUserData', {
   },
 })
 
-app.http('previewUnlock', {
+const previewAccessHandler = async (request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> => {
+  try {
+    const user = await requestUser(request)
+    const body = await bodyOf<{ code?: unknown }>(request)
+    if (
+      process.env.FEATURE_ENABLE_AUTO_PR_PREVIEW !== 'true' ||
+      !canActivatePreview(body.code, getPreviewInviteCode(), user.previewAccessApproved === true)
+    ) {
+      throw new RequestError(403, 'Preview access could not be enabled.')
+    }
+    const updated = await enablePreviewForUser(user)
+    return json({ featureFlags: updated.featureFlags })
+  } catch (error) {
+    return fail(error, context)
+  }
+}
+
+app.http('previewAccess', {
+  methods: ['POST'],
+  authLevel: 'anonymous',
+  route: 'v1/users/me/preview-access',
+  handler: previewAccessHandler,
+})
+
+app.http('previewUnlockLegacy', {
   methods: ['POST'],
   authLevel: 'anonymous',
   route: 'v1/preview/unlock',
-  handler: async (request, context) => {
-    try {
-      const user = await requestUser(request)
-      const body = await bodyOf<{ code?: unknown }>(request)
-      const configuredCode = process.env.JUDGE_DEMO_CODE
-      if (
-        process.env.FEATURE_ENABLE_AUTO_PR_PREVIEW !== 'true' ||
-        !configuredCode ||
-        ensureString(body.code, 'code') !== configuredCode
-      ) {
-        throw new RequestError(403, 'Preview access could not be enabled.')
-      }
-      const updated = await enablePreviewForUser(user)
-      return json({ featureFlags: updated.featureFlags })
-    } catch (error) {
-      return fail(error, context)
-    }
-  },
+  handler: previewAccessHandler,
 })
 
 app.http('remediatePullRequest', {
@@ -433,6 +464,9 @@ app.http('remediatePullRequest', {
   handler: async (request, context) => {
     try {
       const user = await requirePreview(request)
+      if (!await consumeRateLimit(`user:${user.entraOid}`, 5)) {
+        throw new RequestError(429, 'The hourly remediation limit for this account has been reached.')
+      }
       const body = await bodyOf<{ repoUrl?: unknown; baseBranch?: unknown; targetRepoOwner?: unknown }>(request)
       const repo = parseRepoUrl(ensureString(body.repoUrl, 'repoUrl'))
       const token = process.env.GITHUB_BOT_TOKEN
@@ -604,6 +638,7 @@ app.http('remediatePullRequest', {
       const record = {
         id: `remediation_${timestamp}`,
         entraOid: user.entraOid,
+        userId: user.id,
         repoUrl: repo.url,
         branch,
         commitSha: commit.data.sha,

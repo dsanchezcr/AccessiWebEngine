@@ -502,7 +502,7 @@ function Workspace() {
     event.preventDefault()
     try {
       const token = await getAccessToken(instance, accounts[0])
-      await apiRequest('preview/unlock', token, {
+      await apiRequest('users/me/preview-access', token, {
         method: 'POST',
         body: JSON.stringify({ code: judgeCode }),
       })
