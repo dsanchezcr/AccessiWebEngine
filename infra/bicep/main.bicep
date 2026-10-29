@@ -38,8 +38,8 @@ param entraB2cIssuer string = ''
 param featureEnableAutoPrPreview bool = false
 
 var resourceGroupName = environment == 'pr'
-  ? '${projectName}-pr-${prNumber}'
-  : '${projectName}-${environment}'
+  ? 'rg-${projectName}-pr-${prNumber}'
+  : 'rg-${projectName}-${environment}'
 
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: resourceGroupName

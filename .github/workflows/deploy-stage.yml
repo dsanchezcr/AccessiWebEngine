@@ -1,0 +1,129 @@
+name: Deploy one AccessiWeb environment
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Target GitHub/Azure environment
+        required: true
+        type: string
+    secrets:
+      AZURE_CREDENTIALS:
+        required: true
+      META_API_KEY:
+        required: true
+      GITHUB_BOT_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      META_API_KEY: ${{ secrets.META_API_KEY }}
+      GITHUB_BOT_TOKEN: ${{ secrets.GITHUB_BOT_TOKEN }}
+      AZURE_DEPLOYMENT_PRINCIPAL_ID: ${{ vars.AZURE_DEPLOYMENT_PRINCIPAL_ID }}
+      META_API_BASE_URL: ${{ vars.META_API_BASE_URL }}
+      ENTRA_B2C_TENANT_NAME: ${{ vars.ENTRA_B2C_TENANT_NAME }}
+      ENTRA_B2C_CLIENT_ID: ${{ vars.ENTRA_B2C_CLIENT_ID }}
+      ENTRA_B2C_POLICY_NAME: ${{ vars.ENTRA_B2C_POLICY_NAME }}
+      ENTRA_B2C_ISSUER: ${{ vars.ENTRA_B2C_ISSUER }}
+      FEATURE_ENABLE_AUTO_PR_PREVIEW: ${{ vars.FEATURE_ENABLE_AUTO_PR_PREVIEW }}
+      VITE_ENTRA_B2C_TENANT_NAME: ${{ vars.ENTRA_B2C_TENANT_NAME }}
+      VITE_ENTRA_B2C_CLIENT_ID: ${{ vars.ENTRA_B2C_CLIENT_ID }}
+      VITE_ENTRA_B2C_SIGNUP_SIGNIN_POLICY: ${{ vars.ENTRA_B2C_POLICY_NAME }}
+      VITE_ENTRA_B2C_API_SCOPE: ${{ vars.VITE_ENTRA_B2C_API_SCOPE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in AZURE_CREDENTIALS META_API_KEY GITHUB_BOT_TOKEN AZURE_DEPLOYMENT_PRINCIPAL_ID META_API_BASE_URL; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Required environment secret or variable is missing: $name" >&2
+              exit 1
+            fi
+          done
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Provision environment
+        id: infra
+        shell: bash
+        env:
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          az deployment sub create \
+            --name "deploy-accessiweb-${TARGET_ENVIRONMENT}" \
+            --location eastus2 \
+            --template-file infra/bicep/main.bicep \
+            --parameters \
+              environment="$TARGET_ENVIRONMENT" \
+              deploymentPrincipalId="$AZURE_DEPLOYMENT_PRINCIPAL_ID" \
+              metaApiKey="$META_API_KEY" \
+              githubBotToken="$GITHUB_BOT_TOKEN" \
+              metaApiBaseUrl="$META_API_BASE_URL" \
+              entraB2cTenantName="${ENTRA_B2C_TENANT_NAME:-}" \
+              entraB2cClientId="${ENTRA_B2C_CLIENT_ID:-}" \
+              entraB2cPolicyName="${ENTRA_B2C_POLICY_NAME:-}" \
+              entraB2cIssuer="${ENTRA_B2C_ISSUER:-}" \
+              featureEnableAutoPrPreview="${FEATURE_ENABLE_AUTO_PR_PREVIEW:-false}" \
+            --query properties.outputs --output json > /tmp/accessiweb-deployment-outputs.json
+          echo "resource_group=$(jq -r '.resourceGroupName.value' /tmp/accessiweb-deployment-outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "api_name=$(jq -r '.functionAppName.value' /tmp/accessiweb-deployment-outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "api_url=$(jq -r '.functionAppUrl.value' /tmp/accessiweb-deployment-outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "swa_name=$(jq -r '.staticWebAppName.value' /tmp/accessiweb-deployment-outputs.json)" >> "$GITHUB_OUTPUT"
+      - uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ steps.infra.outputs.api_name }}
+          package: apps/api
+          remote-build: true
+      - name: Build and deploy frontend
+        env:
+          VITE_API_BASE_URL: ${{ steps.infra.outputs.api_url }}/api
+        run: |
+          set -euo pipefail
+          npm run build --workspace apps/web
+          cp apps/web/staticwebapp.config.json apps/web/dist/staticwebapp.config.json
+      - name: Get Static Web App deployment token
+        id: swa-token
+        env:
+          RESOURCE_GROUP: ${{ steps.infra.outputs.resource_group }}
+          STATIC_WEB_APP_NAME: ${{ steps.infra.outputs.swa_name }}
+        run: |
+          token="$(az staticwebapp secrets list --name "$STATIC_WEB_APP_NAME" --resource-group "$RESOURCE_GROUP" --query properties.apiKey --output tsv)"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
+          app_location: apps/web/dist
+          api_location: ''
+          output_location: ''
+          skip_app_build: true
+      - name: Verify health endpoint
+        env:
+          HEALTH_URL: ${{ steps.infra.outputs.api_url }}/api/v1/health
+        run: |
+          for attempt in $(seq 1 24); do
+            if curl --fail --silent --show-error "$HEALTH_URL"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Function API health check failed." >&2
+          exit 1

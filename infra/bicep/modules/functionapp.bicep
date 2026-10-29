@@ -96,6 +96,8 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     FUNCTIONS_EXTENSION_VERSION: '~4'
     FUNCTIONS_WORKER_RUNTIME: 'node'
     AzureWebJobsStorage: storageConnectionString
+    SCM_DO_BUILD_DURING_DEPLOYMENT: 'true'
+    ENABLE_ORYX_BUILD: 'true'
     WEBSITE_RUN_FROM_PACKAGE: '1'
     APP_ENV: environment == 'prod' ? 'production' : environment
     APPLICATIONINSIGHTS_CONNECTION_STRING: applicationInsightsConnectionString

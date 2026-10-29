@@ -240,6 +240,13 @@ const meta = () => new MetaAiClient({
   onUsage: (usage) => console.info(JSON.stringify({ event: 'meta_api_usage', ...usage })),
 })
 
+app.http('health', {
+  methods: ['GET'],
+  authLevel: 'anonymous',
+  route: 'v1/health',
+  handler: () => json({ status: 'ok' }),
+})
+
 app.http('webScan', {
   methods: ['POST'],
   authLevel: 'anonymous',

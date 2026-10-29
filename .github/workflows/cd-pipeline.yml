@@ -1,0 +1,45 @@
+name: Promote AccessiWeb
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: az bicep build --file infra/bicep/main.bicep --stdout > /dev/null
+
+  staging:
+    needs: validate
+    uses: ./.github/workflows/deploy-stage.yml
+    with:
+      environment: staging
+    secrets: inherit
+
+  qa:
+    needs: staging
+    uses: ./.github/workflows/deploy-stage.yml
+    with:
+      environment: qa
+    secrets: inherit
+
+  prod:
+    needs: qa
+    uses: ./.github/workflows/deploy-stage.yml
+    with:
+      environment: prod
+    secrets: inherit

@@ -1,0 +1,176 @@
+name: PR ephemeral environment
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: az bicep build --file infra/bicep/main.bicep --stdout > /dev/null
+
+  deploy:
+    needs: verify
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      META_API_KEY: ${{ secrets.META_API_KEY }}
+      GITHUB_BOT_TOKEN: ${{ secrets.GITHUB_BOT_TOKEN }}
+      AZURE_DEPLOYMENT_PRINCIPAL_ID: ${{ vars.AZURE_DEPLOYMENT_PRINCIPAL_ID }}
+      META_API_BASE_URL: ${{ vars.META_API_BASE_URL }}
+      ENTRA_B2C_TENANT_NAME: ${{ vars.ENTRA_B2C_TENANT_NAME }}
+      ENTRA_B2C_CLIENT_ID: ${{ vars.ENTRA_B2C_CLIENT_ID }}
+      ENTRA_B2C_POLICY_NAME: ${{ vars.ENTRA_B2C_POLICY_NAME }}
+      ENTRA_B2C_ISSUER: ${{ vars.ENTRA_B2C_ISSUER }}
+      FEATURE_ENABLE_AUTO_PR_PREVIEW: ${{ vars.FEATURE_ENABLE_AUTO_PR_PREVIEW }}
+      VITE_ENTRA_B2C_TENANT_NAME: ${{ vars.ENTRA_B2C_TENANT_NAME }}
+      VITE_ENTRA_B2C_CLIENT_ID: ${{ vars.ENTRA_B2C_CLIENT_ID }}
+      VITE_ENTRA_B2C_SIGNUP_SIGNIN_POLICY: ${{ vars.ENTRA_B2C_POLICY_NAME }}
+      VITE_ENTRA_B2C_API_SCOPE: ${{ vars.VITE_ENTRA_B2C_API_SCOPE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in AZURE_CREDENTIALS META_API_KEY GITHUB_BOT_TOKEN AZURE_DEPLOYMENT_PRINCIPAL_ID META_API_BASE_URL; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Required repository secret or variable is missing: $name" >&2
+              exit 1
+            fi
+          done
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Provision isolated Azure resources
+        id: infra
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RESOURCE_GROUP: rg-accessiweb-pr-${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          az deployment sub create \
+            --name "deploy-accessiweb-pr-${PR_NUMBER}" \
+            --location eastus2 \
+            --template-file infra/bicep/main.bicep \
+            --parameters \
+              environment=pr \
+              prNumber="$PR_NUMBER" \
+              deploymentPrincipalId="$AZURE_DEPLOYMENT_PRINCIPAL_ID" \
+              metaApiKey="$META_API_KEY" \
+              githubBotToken="$GITHUB_BOT_TOKEN" \
+              metaApiBaseUrl="${META_API_BASE_URL:-}" \
+              entraB2cTenantName="${ENTRA_B2C_TENANT_NAME:-}" \
+              entraB2cClientId="${ENTRA_B2C_CLIENT_ID:-}" \
+              entraB2cPolicyName="${ENTRA_B2C_POLICY_NAME:-}" \
+              entraB2cIssuer="${ENTRA_B2C_ISSUER:-}" \
+              featureEnableAutoPrPreview="${FEATURE_ENABLE_AUTO_PR_PREVIEW:-false}" \
+            --query properties.outputs --output json > /tmp/accessiweb-deployment-outputs.json
+          echo "resource_group=$(jq -r '.resourceGroupName.value' /tmp/accessiweb-deployment-outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "api_name=$(jq -r '.functionAppName.value' /tmp/accessiweb-deployment-outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "api_url=$(jq -r '.functionAppUrl.value' /tmp/accessiweb-deployment-outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "swa_name=$(jq -r '.staticWebAppName.value' /tmp/accessiweb-deployment-outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "site_url=$(jq -r '.staticWebAppUrl.value' /tmp/accessiweb-deployment-outputs.json)" >> "$GITHUB_OUTPUT"
+      - name: Build Azure Function
+        run: npm run build --workspace apps/api
+      - uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ steps.infra.outputs.api_name }}
+          package: apps/api
+          remote-build: true
+      - name: Build and deploy Static Web App
+        env:
+          VITE_API_BASE_URL: ${{ steps.infra.outputs.api_url }}/api
+        run: |
+          set -euo pipefail
+          npm run build --workspace apps/web
+          cp apps/web/staticwebapp.config.json apps/web/dist/staticwebapp.config.json
+      - name: Get Static Web App deployment token
+        id: swa-token
+        env:
+          RESOURCE_GROUP: ${{ steps.infra.outputs.resource_group }}
+          STATIC_WEB_APP_NAME: ${{ steps.infra.outputs.swa_name }}
+        run: |
+          token="$(az staticwebapp secrets list --name "$STATIC_WEB_APP_NAME" --resource-group "$RESOURCE_GROUP" --query properties.apiKey --output tsv)"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
+          app_location: apps/web/dist
+          api_location: ''
+          output_location: ''
+          skip_app_build: true
+      - name: Check API health
+        env:
+          HEALTH_URL: ${{ steps.infra.outputs.api_url }}/api/v1/health
+        run: |
+          for attempt in $(seq 1 24); do
+            if curl --fail --silent --show-error "$HEALTH_URL"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Function API health check failed." >&2
+          exit 1
+      - name: Post preview links
+        uses: actions/github-script@v7
+        env:
+          SITE_URL: ${{ steps.infra.outputs.site_url }}
+          API_URL: ${{ steps.infra.outputs.api_url }}
+          RESOURCE_GROUP: ${{ steps.infra.outputs.resource_group }}
+        with:
+          script: |
+            const marker = '<!-- accessiweb-ephemeral-preview -->'
+            const body = `${marker}\nAccessiWeb PR environment is ready.\n\n- Frontend: ${process.env.SITE_URL}\n- API health: ${process.env.API_URL}/api/v1/health\n- Azure resource group: \`${process.env.RESOURCE_GROUP}\``
+            const { owner, repo } = context.repo
+            const issue_number = context.issue.number
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number })
+            const existing = comments.find(comment => comment.body?.includes(marker))
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body })
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body })
+            }
+
+  teardown:
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+    steps:
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Delete PR resource group
+        env:
+          RESOURCE_GROUP: rg-accessiweb-pr-${{ github.event.pull_request.number }}
+        run: |
+          if [[ "$(az group exists --name "$RESOURCE_GROUP")" == "true" ]]; then
+            az group delete --name "$RESOURCE_GROUP" --yes --no-wait
+          fi
