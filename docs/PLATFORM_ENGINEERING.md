@@ -36,6 +36,7 @@ Configure these repository secrets (or environment secrets for permanent tiers):
 | `AZURE_CREDENTIALS` | Service-principal JSON consumed by `azure/login@v2` |
 | `META_API_KEY` | Server-side Meta API authentication; stored in Key Vault by deployment |
 | `GITHUB_BOT_TOKEN` | Server-side GitHub issue/remediation integration token; stored in Key Vault |
+| `META_PREVIEW_INVITE_CODE` | Optional shared preview invite; stored in Key Vault when set |
 
 Set the following Actions variables at repository scope for PR deployments and separately in each `staging`, `qa`, and `prod` environment:
 
@@ -43,6 +44,10 @@ Set the following Actions variables at repository scope for PR deployments and s
 | --- | --- |
 | `AZURE_DEPLOYMENT_PRINCIPAL_ID` | Service principal object ID used for Key Vault role assignment |
 | `META_API_BASE_URL` | OpenAI-compatible Meta Model API base URL |
+| `META_ANALYSIS_PROVIDER` | `meta` or `open-weights` |
+| `META_MUSE_SPARK_OPEN_URL` | Optional open-weights endpoint |
+| `META_MUSE_CODE_MODEL`, `META_SAM_MODEL`, `META_MUSE_WONDER_MODEL`, `META_MUSE_IMAGE_MODEL` | Model identifiers (defaults are supplied by Bicep) |
+| `GITHUB_ISSUE_ALLOWED_REPOSITORIES` | Comma-separated `owner/repo` issue-write allowlist |
 | `ENTRA_B2C_TENANT_NAME` | B2C tenant short name |
 | `ENTRA_B2C_CLIENT_ID` | Client/application ID |
 | `ENTRA_B2C_POLICY_NAME` | Sign-up/sign-in policy |
@@ -80,6 +85,7 @@ az deployment sub create \
     deploymentPrincipalId="<SERVICE_PRINCIPAL_OBJECT_ID>" \
     metaApiKey="<META_API_KEY>" \
     githubBotToken="<GITHUB_BOT_TOKEN>" \
+    metaPreviewInviteCode="<OPTIONAL_PREVIEW_CODE_OR_EMPTY>" \
     metaApiBaseUrl="<META_API_BASE_URL>"
 ```
 
@@ -92,6 +98,8 @@ The Bicep Function App uses a system-assigned identity for Cosmos access in all 
 - Each environment deployment creates or updates its resources from Bicep before deploying application artifacts. The frontend build receives the deployed Function URL and copies `staticwebapp.config.json` into the SWA artifact.
 
 The current automated checks are TypeScript typechecks, Node tests, production builds, Bicep compilation, and an API health check. This repository does not yet include a browser-based Playwright/axe suite or a dedicated ESLint script; the workflows intentionally do not claim those checks ran.
+
+The promotion workflow is restricted to `main` for both pushes and manual dispatch. Set each GitHub environment's deployment-branch rule to `main` as an additional protection, and require production reviewers.
 
 ## Operational notes
 

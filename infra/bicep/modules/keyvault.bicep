@@ -6,6 +6,8 @@ param deploymentPrincipalType string
 param metaApiKey string
 @secure()
 param githubBotToken string
+@secure()
+param metaPreviewInviteCode string
 
 var suffix = uniqueString(resourceGroup().id)
 var compactProject = take(toLower(replace(projectName, '-', '')), 8)
@@ -63,6 +65,20 @@ resource githubSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   name: 'github-bot-token'
   properties: {
     value: githubBotToken
+    attributes: {
+      enabled: true
+    }
+  }
+  dependsOn: [
+    deploymentSecretsRole
+  ]
+}
+
+resource previewInviteSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(metaPreviewInviteCode)) {
+  parent: vault
+  name: 'meta-preview-invite-code'
+  properties: {
+    value: metaPreviewInviteCode
     attributes: {
       enabled: true
     }

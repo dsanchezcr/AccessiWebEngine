@@ -44,7 +44,7 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
             name: 'EnableServerless'
           }
         ]
-    enableAutomaticFailover: environment == 'prod'
+    enableAutomaticFailover: false
     enableMultipleWriteLocations: false
     disableLocalAuth: false
     publicNetworkAccess: 'Enabled'

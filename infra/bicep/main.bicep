@@ -27,10 +27,17 @@ param deploymentPrincipalType string = 'ServicePrincipal'
 param metaApiKey string
 @secure()
 param githubBotToken string
+@secure()
+param metaPreviewInviteCode string
 
 param metaApiBaseUrl string = ''
+param metaAnalysisProvider string = 'meta'
+param metaMuseSparkOpenUrl string = ''
 param metaMuseCodeModel string = 'muse-code'
 param metaSamModel string = 'sam-3.1'
+param metaMuseWonderModel string = 'muse-wonder'
+param metaMuseImageModel string = 'muse-image'
+param githubIssueAllowedRepositories string = ''
 param entraB2cTenantName string = ''
 param entraB2cClientId string = ''
 param entraB2cPolicyName string = ''
@@ -62,6 +69,7 @@ module keyVault 'modules/keyvault.bicep' = {
     deploymentPrincipalType: deploymentPrincipalType
     metaApiKey: metaApiKey
     githubBotToken: githubBotToken
+    metaPreviewInviteCode: metaPreviewInviteCode
   }
 }
 
@@ -110,8 +118,14 @@ module functionApp 'modules/functionapp.bicep' = {
     applicationInsightsConnectionString: monitoring.outputs.applicationInsightsConnectionString
     staticWebAppOrigin: staticWebApp.outputs.staticWebAppUrl
     metaApiBaseUrl: metaApiBaseUrl
+    metaAnalysisProvider: metaAnalysisProvider
+    metaMuseSparkOpenUrl: metaMuseSparkOpenUrl
     metaMuseCodeModel: metaMuseCodeModel
     metaSamModel: metaSamModel
+    metaMuseWonderModel: metaMuseWonderModel
+    metaMuseImageModel: metaMuseImageModel
+    githubIssueAllowedRepositories: githubIssueAllowedRepositories
+    enablePreviewInviteCode: !empty(metaPreviewInviteCode)
     entraB2cTenantName: entraB2cTenantName
     entraB2cClientId: entraB2cClientId
     entraB2cPolicyName: entraB2cPolicyName

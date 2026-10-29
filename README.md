@@ -2,6 +2,23 @@
 
 AccessiWeb Engine is a TypeScript monorepo starter for AI-assisted accessibility audits and reviewable GitHub remediations.
 
+## Architecture
+
+```mermaid
+flowchart LR
+  Browser[React and Vite frontend] -->|HTTPS| Functions[Azure Functions API]
+  Functions -->|Managed identity| Cosmos[(Cosmos DB)]
+  Functions -->|Key Vault references| Vault[Azure Key Vault]
+  Functions -->|Configured model endpoint| Meta[Meta-compatible Model API]
+  Functions -->|Scoped bot token| GitHub[GitHub Issues and PRs]
+  Functions --> Insights[Application Insights]
+  Actions[GitHub Actions] -->|Subscription Bicep deployments| Azure[Azure resource groups]
+  Actions -->|Build and deploy| Browser
+  Actions -->|Build and deploy| Functions
+```
+
+The Azure resources and CI/CD workflows are defined under `infra/bicep` and `.github/workflows`. See [Platform Engineering](docs/PLATFORM_ENGINEERING.md), [Security](SECURITY.md), [Privacy](PRIVACY.md), and the [Hackathon submission draft](docs/HACKATHON_SUBMISSION.md) for deployment and project details.
+
 ## Experiences
 
 - **Web URL audit:** Fetches public HTML, optionally analyzes a user-provided screenshot with SAM, produces a structured WCAG report, and can open a GitHub issue.
@@ -39,9 +56,25 @@ Entra ID B2C configuration uses `ENTRA_B2C_TENANT_NAME`, `ENTRA_B2C_SIGNUP_SIGNI
 - `DELETE /api/v1/users/me/data`
 - `POST /api/v1/users/me/preview-access`
 - `POST /api/v1/remediate/pull-request`
+- `GET /api/v1/health` (liveness only; it does not check dependencies)
 
 The web scanner rejects non-public destinations, revalidates and pins every redirect, limits page size, and never executes the target page. Its automated baseline is static HTML inspection, not axe-core or a rendered browser audit. Screenshots are optional and supplied by the user; they are not persisted. Screenshot bounds are raw image pixels; without CSS viewport/DPR metadata, the engine does not claim WCAG CSS-pixel target-size conformance. Public scans are bounded to 60 source files and 1.5 MB of repository content.
 
 ## Scope and deployment
 
-This repository currently provides the app, core service adapters, and local configuration examples. Production deployment still requires provisioning Azure resources, configuring Entra B2C and GitHub permissions, setting rate limits/retention policies, and verifying model endpoint compatibility in the target Meta API account. Review each generated PR before merging.
+### Environment variables
+
+| Variable | Runtime | Purpose |
+| --- | --- | --- |
+| `META_API_KEY`, `META_API_BASE_URL` | API | Meta-compatible model endpoint credentials and URL |
+| `META_MUSE_CODE_MODEL`, `META_SAM_MODEL`, `META_MUSE_WONDER_MODEL`, `META_MUSE_IMAGE_MODEL` | API | Model identifiers |
+| `META_ANALYSIS_PROVIDER`, `META_MUSE_SPARK_OPEN_URL` | API | Optional repository-audit open-weights route |
+| `GITHUB_BOT_TOKEN`, `GITHUB_ISSUE_ALLOWED_REPOSITORIES` | API | GitHub write integration and explicit issue allowlist |
+| `COSMOS_DB_ENDPOINT` | API | Cosmos endpoint; deployed apps use their system-assigned identity |
+| `COSMOS_DB_CONNECTION_STRING` | API local development only | Local Cosmos connection-string fallback |
+| `ENTRA_B2C_TENANT_NAME`, `ENTRA_B2C_SIGNUP_SIGNIN_POLICY`, `ENTRA_B2C_CLIENT_ID`, `ENTRA_B2C_ISSUER` | API | JWT validation and B2C sign-in configuration |
+| `FEATURE_ENABLE_AUTO_PR_PREVIEW`, `META_PREVIEW_INVITE_CODE` | API | Global preview gate and optional invite; do not expose the invite to the browser |
+| `VITE_API_BASE_URL` | Frontend build | API base URL; deployment workflows set this from Bicep output |
+| `VITE_ENTRA_B2C_TENANT_NAME`, `VITE_ENTRA_B2C_CLIENT_ID`, `VITE_ENTRA_B2C_SIGNUP_SIGNIN_POLICY`, `VITE_ENTRA_B2C_PROFILE_EDIT_POLICY`, `VITE_ENTRA_B2C_REDIRECT_URI`, `VITE_ENTRA_B2C_API_SCOPE` | Frontend build | Public identity-provider configuration only |
+
+Production deployment still requires configuring Azure credentials, Entra B2C, Meta/GitHub permissions, GitHub environment protection, retention operations, and validating model endpoint compatibility. This repository does not yet include a browser-based Playwright/axe suite. Review each generated PR before merging; see the linked platform, security, and privacy documentation.

@@ -8,8 +8,14 @@ param cosmosEndpoint string
 param applicationInsightsConnectionString string
 param staticWebAppOrigin string
 param metaApiBaseUrl string
+param metaAnalysisProvider string
+param metaMuseSparkOpenUrl string
 param metaMuseCodeModel string
 param metaSamModel string
+param metaMuseWonderModel string
+param metaMuseImageModel string
+param githubIssueAllowedRepositories string
+param enablePreviewInviteCode bool
 param entraB2cTenantName string
 param entraB2cClientId string
 param entraB2cPolicyName string
@@ -104,14 +110,22 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     COSMOS_DB_ENDPOINT: cosmosEndpoint
     META_API_KEY: '@Microsoft.KeyVault(SecretUri=${keyVaultSecretUri}/meta-api-key/)'
     META_API_BASE_URL: metaApiBaseUrl
+    META_ANALYSIS_PROVIDER: metaAnalysisProvider
+    META_MUSE_SPARK_OPEN_URL: metaMuseSparkOpenUrl
     META_MUSE_CODE_MODEL: metaMuseCodeModel
     META_SAM_MODEL: metaSamModel
+    META_MUSE_WONDER_MODEL: metaMuseWonderModel
+    META_MUSE_IMAGE_MODEL: metaMuseImageModel
     GITHUB_BOT_TOKEN: '@Microsoft.KeyVault(SecretUri=${keyVaultSecretUri}/github-bot-token/)'
+    GITHUB_ISSUE_ALLOWED_REPOSITORIES: githubIssueAllowedRepositories
     ENTRA_B2C_TENANT_NAME: entraB2cTenantName
     ENTRA_B2C_CLIENT_ID: entraB2cClientId
     ENTRA_B2C_SIGNUP_SIGNIN_POLICY: entraB2cPolicyName
     ENTRA_B2C_ISSUER: entraB2cIssuer
     FEATURE_ENABLE_AUTO_PR_PREVIEW: string(featureEnableAutoPrPreview)
+    ...(enablePreviewInviteCode ? {
+      META_PREVIEW_INVITE_CODE: '@Microsoft.KeyVault(SecretUri=${keyVaultSecretUri}/meta-preview-invite-code/)'
+    } : {})
   }
 }
 

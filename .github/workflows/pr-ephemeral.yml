@@ -35,8 +35,16 @@ jobs:
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
       META_API_KEY: ${{ secrets.META_API_KEY }}
       GITHUB_BOT_TOKEN: ${{ secrets.GITHUB_BOT_TOKEN }}
+      META_PREVIEW_INVITE_CODE: ${{ secrets.META_PREVIEW_INVITE_CODE }}
       AZURE_DEPLOYMENT_PRINCIPAL_ID: ${{ vars.AZURE_DEPLOYMENT_PRINCIPAL_ID }}
       META_API_BASE_URL: ${{ vars.META_API_BASE_URL }}
+      META_ANALYSIS_PROVIDER: ${{ vars.META_ANALYSIS_PROVIDER }}
+      META_MUSE_SPARK_OPEN_URL: ${{ vars.META_MUSE_SPARK_OPEN_URL }}
+      META_MUSE_CODE_MODEL: ${{ vars.META_MUSE_CODE_MODEL }}
+      META_SAM_MODEL: ${{ vars.META_SAM_MODEL }}
+      META_MUSE_WONDER_MODEL: ${{ vars.META_MUSE_WONDER_MODEL }}
+      META_MUSE_IMAGE_MODEL: ${{ vars.META_MUSE_IMAGE_MODEL }}
+      GITHUB_ISSUE_ALLOWED_REPOSITORIES: ${{ vars.GITHUB_ISSUE_ALLOWED_REPOSITORIES }}
       ENTRA_B2C_TENANT_NAME: ${{ vars.ENTRA_B2C_TENANT_NAME }}
       ENTRA_B2C_CLIENT_ID: ${{ vars.ENTRA_B2C_CLIENT_ID }}
       ENTRA_B2C_POLICY_NAME: ${{ vars.ENTRA_B2C_POLICY_NAME }}
@@ -45,6 +53,7 @@ jobs:
       VITE_ENTRA_B2C_TENANT_NAME: ${{ vars.ENTRA_B2C_TENANT_NAME }}
       VITE_ENTRA_B2C_CLIENT_ID: ${{ vars.ENTRA_B2C_CLIENT_ID }}
       VITE_ENTRA_B2C_SIGNUP_SIGNIN_POLICY: ${{ vars.ENTRA_B2C_POLICY_NAME }}
+      VITE_ENTRA_B2C_PROFILE_EDIT_POLICY: ${{ vars.ENTRA_B2C_PROFILE_EDIT_POLICY }}
       VITE_ENTRA_B2C_API_SCOPE: ${{ vars.VITE_ENTRA_B2C_API_SCOPE }}
     steps:
       - uses: actions/checkout@v4
@@ -71,7 +80,6 @@ jobs:
         shell: bash
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          RESOURCE_GROUP: rg-accessiweb-pr-${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           az deployment sub create \
@@ -84,7 +92,15 @@ jobs:
               deploymentPrincipalId="$AZURE_DEPLOYMENT_PRINCIPAL_ID" \
               metaApiKey="$META_API_KEY" \
               githubBotToken="$GITHUB_BOT_TOKEN" \
+              metaPreviewInviteCode="${META_PREVIEW_INVITE_CODE:-}" \
               metaApiBaseUrl="${META_API_BASE_URL:-}" \
+              metaAnalysisProvider="${META_ANALYSIS_PROVIDER:-meta}" \
+              metaMuseSparkOpenUrl="${META_MUSE_SPARK_OPEN_URL:-}" \
+              metaMuseCodeModel="${META_MUSE_CODE_MODEL:-muse-code}" \
+              metaSamModel="${META_SAM_MODEL:-sam-3.1}" \
+              metaMuseWonderModel="${META_MUSE_WONDER_MODEL:-muse-wonder}" \
+              metaMuseImageModel="${META_MUSE_IMAGE_MODEL:-muse-image}" \
+              githubIssueAllowedRepositories="${GITHUB_ISSUE_ALLOWED_REPOSITORIES:-}" \
               entraB2cTenantName="${ENTRA_B2C_TENANT_NAME:-}" \
               entraB2cClientId="${ENTRA_B2C_CLIENT_ID:-}" \
               entraB2cPolicyName="${ENTRA_B2C_POLICY_NAME:-}" \
@@ -161,8 +177,6 @@ jobs:
   teardown:
     if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    env:
-      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
     steps:
       - uses: azure/login@v2
         with:
