@@ -77,7 +77,7 @@ const consumeScanQuota = async (request: HttpRequest, owner?: string): Promise<v
   const limitKey = owner
     ? `user:${owner}`
     : `ip:${createHash('sha256')
-      .update(request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown')
+      .update(request.headers.get('x-forwarded-for')?.split(',').at(-1)?.trim() || 'unknown')
       .digest('hex')}`
   if (!await consumeRateLimit(limitKey, owner ? 30 : 10)) {
     throw new RequestError(429, 'The scan limit for this account or address has been reached.')
