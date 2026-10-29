@@ -9,7 +9,28 @@ permissions:
   contents: read
 
 jobs:
+  frontend-accessibility:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build --workspace apps/web
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-accessibility-screenshots
+          path: test-results/playwright/
+          if-no-files-found: warn
+
   verify:
+    needs: frontend-accessibility
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
@@ -22,14 +43,6 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: playwright-screenshots-and-results
-          path: test-results/playwright/
-          if-no-files-found: warn
       - run: az bicep build --file infra/bicep/main.bicep --stdout > /dev/null
 
   deploy:
