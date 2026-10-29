@@ -134,6 +134,18 @@ export const saveScan = async (
   return id
 }
 
+export const getScanScore = async (id: string): Promise<number | undefined> => {
+  const container = await getContainer('scans')
+  const { resources } = await container.items.query<{ report?: { score?: unknown } }>({
+    query: 'SELECT c.report FROM c WHERE c.id = @id',
+    parameters: [{ name: '@id', value: id }],
+  }, { maxItemCount: 1 }).fetchNext()
+  const score = resources[0]?.report?.score
+  return typeof score === 'number' && Number.isInteger(score) && score >= 0 && score <= 100
+    ? score
+    : undefined
+}
+
 export const saveRemediation = async (record: {
   id: string
   entraOid: string

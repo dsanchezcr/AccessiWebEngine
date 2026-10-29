@@ -1,5 +1,16 @@
 import { z } from 'zod'
 
+const HttpUrlSchema = z.string().url().refine((value) => {
+  const protocol = new URL(value).protocol
+  return protocol === 'http:' || protocol === 'https:'
+}, 'URL must use HTTP or HTTPS.')
+
+const GitHubRepositoryUrlSchema = HttpUrlSchema.refine((value) => {
+  const url = new URL(value)
+  return url.hostname.toLowerCase() === 'github.com' &&
+    url.pathname.split('/').filter(Boolean).length >= 2
+}, 'URL must identify a GitHub repository.')
+
 export const FindingSeveritySchema = z.enum(['critical', 'serious', 'moderate', 'minor'])
 
 export const RepoFileSchema = z.object({
@@ -71,14 +82,14 @@ export const PreviewAccessRequestSchema = z.object({
 }).strict()
 
 export const WebScanRequestSchema = z.object({
-  targetUrl: z.string().url(),
+  targetUrl: HttpUrlSchema,
   viewport: z.enum(['desktop', 'mobile']).optional(),
-  targetRepoUrl: z.string().url().optional(),
+  targetRepoUrl: GitHubRepositoryUrlSchema.optional(),
   screenshotBase64: z.string().max(8_000_000).optional(),
   screenshotMimeType: z.enum(['image/png', 'image/jpeg', 'image/webp']).optional(),
-})
+}).strict()
 
 export const RepositoryScanRequestSchema = z.object({
-  repoUrl: z.string().url(),
+  repoUrl: GitHubRepositoryUrlSchema,
   branch: z.string().min(1).max(255).optional(),
-})
+}).strict()

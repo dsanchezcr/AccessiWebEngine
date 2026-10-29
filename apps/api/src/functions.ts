@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto'
 import { app, type HttpRequest, type HttpResponseInit, type InvocationContext } from '@azure/functions'
 import { Octokit } from '@octokit/rest'
 import type { AuditFinding, RepoFile } from '../../../packages/shared/src/types.js'
+import { RepositoryScanRequestSchema, WebScanRequestSchema } from '../../../packages/shared/src/schemas.js'
+import { renderScoreBadgeSvg } from '../../../packages/shared/src/scoreBadge.js'
 import { MetaAiClient } from '../../../packages/engine/src/metaClient.js'
 import { collectDomBaseline } from './domBaseline.js'
 import {
@@ -18,6 +20,7 @@ import {
   consumeRateLimit,
   deleteUserData,
   enablePreviewForUser,
+  getScanScore,
   getOrCreateUser,
   saveRemediation,
   saveScan,
@@ -247,31 +250,49 @@ app.http('health', {
   handler: () => json({ status: 'ok' }),
 })
 
+app.http('scanScoreBadge', {
+  methods: ['GET'],
+  authLevel: 'anonymous',
+  route: 'v1/scans/{scanId}/badge.svg',
+  handler: async (request, context) => {
+    try {
+      const scanId = request.params.scanId ?? ''
+      if (!/^[\da-f-]{36}$/i.test(scanId)) return json({ error: 'Scan not found.' }, 404)
+      const score = await getScanScore(scanId)
+      if (score === undefined) return json({ error: 'Scan not found.' }, 404)
+      return {
+        status: 200,
+        headers: {
+          'Content-Type': 'image/svg+xml; charset=utf-8',
+          'Cache-Control': 'public, max-age=300',
+          'X-Content-Type-Options': 'nosniff',
+        },
+        body: renderScoreBadgeSvg(score),
+      }
+    } catch (error) {
+      return fail(error, context)
+    }
+  },
+})
+
 app.http('webScan', {
   methods: ['POST'],
   authLevel: 'anonymous',
   route: 'v1/scans/web',
   handler: async (request, context) => {
     try {
-      const body = await bodyOf<{
-        targetUrl?: unknown
-        targetRepoUrl?: unknown
-        screenshotBase64?: unknown
-        screenshotMimeType?: unknown
-        viewport?: unknown
-      }>(request)
+      const parsed = WebScanRequestSchema.safeParse(await bodyOf<unknown>(request))
+      if (!parsed.success) throw new RequestError(400, 'Request body does not match the web scan schema.')
+      const body = parsed.data
       const scanOwner = await optionalScanOwner(request)
       await consumeScanQuota(request, scanOwner)
-      const targetUrl = ensureString(body.targetUrl, 'targetUrl')
-      const issueRepo = typeof body.targetRepoUrl === 'string' && body.targetRepoUrl.trim()
-        ? parseRepoUrl(body.targetRepoUrl.trim())
+      const targetUrl = body.targetUrl
+      const issueRepo = body.targetRepoUrl
+        ? parseRepoUrl(body.targetRepoUrl)
         : undefined
-      const screenshotBase64 = typeof body.screenshotBase64 === 'string' ? body.screenshotBase64 : ''
-      const screenshotMimeType = typeof body.screenshotMimeType === 'string' ? body.screenshotMimeType : 'image/png'
-      const viewport = body.viewport === undefined ? 'desktop' : body.viewport
-      if (viewport !== 'desktop' && viewport !== 'mobile') {
-        throw new RequestError(400, 'viewport must be desktop or mobile.')
-      }
+      const screenshotBase64 = body.screenshotBase64 ?? ''
+      const screenshotMimeType = body.screenshotMimeType ?? 'image/png'
+      const viewport = body.viewport ?? 'desktop'
       if (
         screenshotBase64.length > 8_000_000 ||
         (screenshotBase64 && (!/^[A-Za-z0-9+/]+={0,2}$/.test(screenshotBase64) ||
@@ -304,11 +325,13 @@ app.http('repositoryScan', {
   route: 'v1/scans/repo',
   handler: async (request, context) => {
     try {
-      const body = await bodyOf<{ repoUrl?: unknown; branch?: unknown }>(request)
+      const parsed = RepositoryScanRequestSchema.safeParse(await bodyOf<unknown>(request))
+      if (!parsed.success) throw new RequestError(400, 'Request body does not match the repository scan schema.')
+      const body = parsed.data
       const scanOwner = await optionalScanOwner(request)
       await consumeScanQuota(request, scanOwner)
-      const repo = parseRepoUrl(ensureString(body.repoUrl, 'repoUrl'))
-      const branch = typeof body.branch === 'string' ? body.branch : undefined
+      const repo = parseRepoUrl(body.repoUrl)
+      const branch = body.branch
       const { files } = await getRepoFiles(new Octokit(), repo.owner, repo.repo, branch)
       const report = await meta().analyzeRepositorySource(repo.url, files)
       const scanId = await saveScan('SOURCE_CODE', repo.url, report, scanOwner)
@@ -493,7 +516,7 @@ app.http('remediatePullRequest', {
         originalPaths.has(patch.filePath) &&
         !patch.filePath.startsWith('/') &&
         !patch.filePath.split('/').includes('..') &&
-        patch.filePath !== 'docs/ACCESSIBILITY_AUDIT_AND_REMEDIATION.md' &&
+        patch.filePath !== 'ACCESSIBILITY_REMEDIATION_REPORT.md' &&
         patch.content.length <= 1_000_000,
       )
       const coveredFindings = new Set(patches.flatMap((patch) => patch.findingIds))
@@ -610,7 +633,7 @@ app.http('remediatePullRequest', {
         encoding: 'utf-8',
       })
       entries.push({
-        path: 'docs/ACCESSIBILITY_AUDIT_AND_REMEDIATION.md',
+        path: 'ACCESSIBILITY_REMEDIATION_REPORT.md',
         mode: '100644' as const,
         type: 'blob' as const,
         sha: reportBlob.data.sha,

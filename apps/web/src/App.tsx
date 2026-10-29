@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useIsAuthenticated, useMsal } from '@azure/msal-react'
 import type { AccessibilityAuditReport, AuditFinding, SourceCodeAuditReport } from '../../../packages/shared/src/types'
+import { createScoreBadgeMarkdown } from '../../../packages/shared/src/scoreBadge'
 import { apiScope, loginRequest, profileEditRequest } from './auth/msalConfig'
 import './App.css'
 
@@ -156,8 +157,11 @@ function Report({
   }, [audioUrls])
   const report = result.report
   const findings = report.findings ?? []
+  const badgeUrl = new URL(apiUrl(`v1/scans/${encodeURIComponent(result.scanId)}/badge.svg`), window.location.origin).href
   const markdown = [
     '# AccessiWeb accessibility audit',
+    '',
+    createScoreBadgeMarkdown(report.score, badgeUrl),
     '',
     `Score: ${report.score}/100`,
     '',

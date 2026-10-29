@@ -315,6 +315,8 @@ FakesAssemblies/
 node_modules/
 dist/
 apps/api/local.settings.json
+test-results/
+playwright-report/
 
 # Visual Studio 6 build log
 *.plg
