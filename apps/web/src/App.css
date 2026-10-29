@@ -29,7 +29,7 @@
 .hero-card > p strong { color: var(--green-dark); }
 .orbit { display: grid; place-items: center; width: 144px; height: 144px; border: 1px solid #8cc4a5; border-radius: 50%; box-shadow: 0 0 0 16px rgba(111, 176, 138, 0.12), 0 0 0 34px rgba(111, 176, 138, 0.08); }
 .orbit span { display: grid; place-items: center; width: 84px; height: 84px; color: #fff; background: var(--green); border-radius: 50%; font-family: Manrope, sans-serif; font-weight: 800; }
-.hero-chip { display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem; padding: 0.5rem 0.85rem; color: #245c3e; background: #dcefe1; border-radius: 20px; font-size: 0.82rem; font-weight: 700; }
+.hero-chip { display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem; padding: 0.5rem 0.85rem; color: #163f2a; background: #dcefe1; border-radius: 20px; font-size: 0.82rem; font-weight: 700; }
 .scanner-panel { padding: clamp(1.3rem, 4vw, 3rem); border: 1px solid var(--border); border-radius: 18px; background: var(--paper); box-shadow: 0 14px 40px rgba(21, 64, 49, 0.045); }
 .section-heading { max-width: 700px; margin: 0 auto 1.7rem; text-align: center; }
 .section-heading h2, .results h2, .rule-card h3, .info-sections h2 { margin: 0.55rem 0; font-family: Manrope, sans-serif; letter-spacing: -0.025em; }

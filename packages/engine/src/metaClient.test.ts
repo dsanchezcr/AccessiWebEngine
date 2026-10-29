@@ -49,11 +49,18 @@ test('Meta client retries transient errors and fails fast without configuration'
   const client = new MetaAiClient({
     apiKey: 'test-key',
     baseUrl: 'https://meta.example/v1',
-    fetcher: async () => {
+    fetcher: async (_input, init) => {
       calls += 1
-      return calls === 1
-        ? new Response('', { status: 503 })
-        : response({ segments: [] })
+      if (calls === 1) return new Response('', { status: 503 })
+      const request = JSON.parse(String(init?.body)) as { model: string }
+      return request.model === 'sam-3.1'
+        ? response({ segments: [] })
+        : response({
+          summary: 'No issues found.',
+          score: 100,
+          findings: [],
+          categoryScores: { perceivable: 100, operable: 100, understandable: 100, robust: 100 },
+        })
     },
   })
   await client.analyzeWebDomAndVisuals('https://example.com', '<main />', 'image', {})

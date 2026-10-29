@@ -5,7 +5,7 @@ import type {
   RepoFile,
   SourceCodeAuditReport,
 } from '../../shared/src/types.js'
-import { AccessibilityAuditReportSchema, RemediationPlanSchema, SourceCodeAuditReportSchema } from '../../shared/src/schemas.js'
+import { AccessibilityAuditReportSchema, RemediationPlanSchema, SourceCodeAuditReportSchema } from '../../shared/src/schemas.ts'
 import ts from 'typescript'
 
 type JsonSchema = {

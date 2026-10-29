@@ -9,7 +9,7 @@
   font-optical-sizing: auto;
   font-weight: 400;
   --ink: #173a35;
-  --muted: #4a635e;
+  --muted: #2f453e;
   --green: #075e50;
   --green-dark: #06483d;
   --mint: #e7f2eb;
@@ -75,7 +75,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
   .mode-switch button[aria-selected='true'] { color: #ecf4ef; }
   .brand-mark { color: #0e2923; background: #69d6b3; }
   .hero-card { background: #1d3831; }
-  .hero-chip { color: #ecf4ef; }
+  .hero-chip { color: #ecf4ef; background: #1d3831; }
+  .orbit span { color: #0e2923; }
   .score { color: #69d6b3; }
   input { color: var(--ink); background: #12231f; }
   .severity-critical, .severity-serious { color: #ffb8ad; background: #542b27; }

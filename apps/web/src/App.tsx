@@ -97,7 +97,7 @@ function Header({ theme, onThemeChange }: { theme: Theme; onThemeChange: (theme:
   const account = accounts[0]
   return (
     <header className="site-header">
-      <a className="brand" href="/" aria-label="AccessiWeb Engine home">
+      <a className="brand" href="/">
         <span className="brand-mark" aria-hidden="true">A</span>
         <span>AccessiWeb <strong>Engine</strong></span>
       </a>

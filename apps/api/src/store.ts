@@ -12,6 +12,20 @@ export type AccessiWebUser = {
   createdAt: string
 }
 
+export type RemediationRecord = {
+  id: string
+  entraOid: string
+  userId: string
+  repoUrl: string
+  branch?: string
+  commitSha?: string
+  pullRequestUrl?: string
+  status: 'ingest' | 'audit' | 'synthesize_patch' | 'verify' | 'document' | 'submit_pr' | 'complete' | 'failed'
+  failureMessage?: string
+  createdAt: string
+  updatedAt?: string
+}
+
 let client: CosmosClient | undefined
 let databasePromise: Promise<Database> | undefined
 let containersPromise: Promise<void> | undefined
@@ -146,18 +160,9 @@ export const getScanScore = async (id: string): Promise<number | undefined> => {
     : undefined
 }
 
-export const saveRemediation = async (record: {
-  id: string
-  entraOid: string
-  userId: string
-  repoUrl: string
-  branch: string
-  commitSha: string
-  pullRequestUrl: string
-  status: 'complete'
-}) => {
+export const saveRemediation = async (record: RemediationRecord) => {
   const container = await getContainer('remediations')
-  await container.items.create({ ...record, createdAt: new Date().toISOString() })
+  await container.items.upsert({ ...record, updatedAt: new Date().toISOString() })
 }
 
 export const deleteUserData = async (user: AccessiWebUser): Promise<void> => {

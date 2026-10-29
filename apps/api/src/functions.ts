@@ -24,6 +24,7 @@ import {
   getOrCreateUser,
   saveRemediation,
   saveScan,
+  type RemediationRecord,
 } from './store.js'
 import { canActivatePreview, getPreviewInviteCode } from './previewAccess.js'
 
@@ -492,6 +493,7 @@ app.http('remediatePullRequest', {
   authLevel: 'anonymous',
   route: 'v1/remediate/pull-request',
   handler: async (request, context) => {
+    let remediationState: RemediationRecord | undefined
     try {
       const user = await requirePreview(request)
       if (!await consumeRateLimit(`user:${user.entraOid}`, 5)) {
@@ -502,15 +504,32 @@ app.http('remediatePullRequest', {
       const token = process.env.GITHUB_BOT_TOKEN
       if (!token) throw new RequestError(503, 'GitHub remediation is not configured.')
       const octokit = new Octokit({ auth: token })
+      const timestamp = Date.now()
+      const branch = `fix/accessiweb-wcag-remediation-${timestamp}`
+      remediationState = {
+        id: `remediation_${timestamp}`,
+        entraOid: user.entraOid,
+        userId: user.id,
+        repoUrl: repo.url,
+        status: 'ingest',
+        createdAt: new Date(timestamp).toISOString(),
+      }
+      await saveRemediation(remediationState)
       const { files, headSha, baseBranch, treeSha } = await getRepoFiles(
         octokit,
         repo.owner,
         repo.repo,
         typeof body.baseBranch === 'string' ? body.baseBranch : undefined,
       )
+      remediationState.status = 'audit'
+      await saveRemediation(remediationState)
       const audit = await meta().analyzeRepositorySource(repo.url, files)
       if (audit.findings.length === 0) throw new RequestError(400, 'No accessibility findings need remediation.')
+      remediationState.status = 'synthesize_patch'
+      await saveRemediation(remediationState)
       const plan = await meta().generateAutonomousRemediationPlan(files, audit.findings as AuditFinding[])
+      remediationState.status = 'verify'
+      await saveRemediation(remediationState)
       const originalPaths = new Set(files.map((file) => file.path))
       const patches = plan.patches.filter((patch) =>
         originalPaths.has(patch.filePath) &&
@@ -530,61 +549,8 @@ app.http('remediatePullRequest', {
         throw new RequestError(502, 'The remediation plan contained an invalid or unsupported file path.')
       }
 
-      const timestamp = Date.now()
-      const branch = `fix/accessiweb-wcag-remediation-${timestamp}`
-      const targetOwner = repo.owner
-      const authenticated = await octokit.users.getAuthenticated()
-      if (
-        typeof body.targetRepoOwner === 'string' &&
-        body.targetRepoOwner.toLowerCase() !== authenticated.data.login.toLowerCase()
-      ) {
-        throw new RequestError(403, 'The requested fork owner must be the authenticated GitHub bot account.')
-      }
-      let commitOwner = targetOwner
-      let canPush = targetOwner.toLowerCase() === authenticated.data.login.toLowerCase()
-      if (!canPush) {
-        try {
-          const permission = await octokit.repos.getCollaboratorPermissionLevel({
-            owner: targetOwner,
-            repo: repo.repo,
-            username: authenticated.data.login,
-          })
-          canPush = ['admin', 'maintain', 'write'].includes(permission.data.permission)
-        } catch {
-          canPush = false
-        }
-      }
-      if (canPush) {
-        await octokit.git.createRef({
-          owner: commitOwner,
-          repo: repo.repo,
-          ref: `refs/heads/${branch}`,
-          sha: headSha,
-        })
-      } else {
-        const fork = await octokit.repos.createFork({ owner: targetOwner, repo: repo.repo })
-        commitOwner = fork.data.owner.login
-        let lastError: unknown
-        for (let attempt = 0; attempt < 5; attempt += 1) {
-          try {
-            await octokit.git.createRef({
-              owner: commitOwner,
-              repo: repo.repo,
-              ref: `refs/heads/${branch}`,
-              sha: headSha,
-            })
-            lastError = undefined
-            break
-          } catch (error) {
-            lastError = error
-            await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)))
-          }
-        }
-        if (lastError) throw lastError
-      }
-
       const remediationReport = [
-        '# Accessibility audit and remediation',
+        '# Accessibility remediation report',
         '',
         `Repository: ${repo.url}`,
         `Baseline score: ${audit.score}/100`,
@@ -617,6 +583,63 @@ app.http('remediatePullRequest', {
         ),
         '- [ ] Perform manual keyboard, screen-reader, and visual verification before merging.',
       ].join('\n')
+      remediationState.status = 'document'
+      remediationState.branch = branch
+      await saveRemediation(remediationState)
+
+      const targetOwner = repo.owner
+      const authenticated = await octokit.users.getAuthenticated()
+      if (
+        typeof body.targetRepoOwner === 'string' &&
+        body.targetRepoOwner.toLowerCase() !== authenticated.data.login.toLowerCase()
+      ) {
+        throw new RequestError(403, 'The requested fork owner must be the authenticated GitHub bot account.')
+      }
+      let commitOwner = targetOwner
+      let canPush = targetOwner.toLowerCase() === authenticated.data.login.toLowerCase()
+      if (!canPush) {
+        try {
+          const permission = await octokit.repos.getCollaboratorPermissionLevel({
+            owner: targetOwner,
+            repo: repo.repo,
+            username: authenticated.data.login,
+          })
+          canPush = ['admin', 'maintain', 'write'].includes(permission.data.permission)
+        } catch {
+          canPush = false
+        }
+      }
+      remediationState.status = 'submit_pr'
+      await saveRemediation(remediationState)
+      if (canPush) {
+        await octokit.git.createRef({
+          owner: commitOwner,
+          repo: repo.repo,
+          ref: `refs/heads/${branch}`,
+          sha: headSha,
+        })
+      } else {
+        const fork = await octokit.repos.createFork({ owner: targetOwner, repo: repo.repo })
+        commitOwner = fork.data.owner.login
+        let lastError: unknown
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          try {
+            await octokit.git.createRef({
+              owner: commitOwner,
+              repo: repo.repo,
+              ref: `refs/heads/${branch}`,
+              sha: headSha,
+            })
+            lastError = undefined
+            break
+          } catch (error) {
+            lastError = error
+            await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)))
+          }
+        }
+        if (lastError) throw lastError
+      }
+
       const entries = await Promise.all(patches.map(async (patch) => {
         const blob = await octokit.git.createBlob({
           owner: commitOwner,
@@ -657,6 +680,8 @@ app.http('remediatePullRequest', {
         ref: `heads/${branch}`,
         sha: commit.data.sha,
       })
+      remediationState.commitSha = commit.data.sha
+      await saveRemediation(remediationState)
       const pullRequest = await octokit.pulls.create({
         owner: targetOwner,
         repo: repo.repo,
@@ -665,19 +690,22 @@ app.http('remediatePullRequest', {
         title: 'Remediate accessibility findings with AccessiWeb Engine',
         body: `## Compliance scores\n\n| Before | Estimated after |\n| ---: | ---: |\n| ${audit.score}/100 | ${plan.estimatedScoreAfter ?? 'Follow-up audit required'}${plan.estimatedScoreAfter === undefined ? '' : '/100'} |\n\n## Changed files\n\n${patches.map((patch) => `- \`${patch.filePath}\` — ${patch.findingIds.length} finding(s) addressed`).join('\n')}\n\n${plan.reportMarkdown}\n\n## Verification\n\n${plan.verificationNotes.map((note) => `- ${note}`).join('\n')}\n\n- [ ] Review all changes and manually verify with keyboard and assistive technology before merging.`,
       })
-      const record = {
-        id: `remediation_${timestamp}`,
-        entraOid: user.entraOid,
-        userId: user.id,
-        repoUrl: repo.url,
-        branch,
-        commitSha: commit.data.sha,
-        pullRequestUrl: pullRequest.data.html_url,
-        status: 'complete' as const,
-      }
-      await saveRemediation(record)
-      return json(record, 201)
+      remediationState.pullRequestUrl = pullRequest.data.html_url
+      remediationState.status = 'complete'
+      await saveRemediation(remediationState)
+      return json(remediationState, 201)
     } catch (error) {
+      if (remediationState && remediationState.status !== 'complete') {
+        try {
+          remediationState.status = 'failed'
+          remediationState.failureMessage = error instanceof RequestError
+            ? error.message
+            : 'Remediation failed; see service logs.'
+          await saveRemediation(remediationState)
+        } catch {
+          context.error('Could not persist remediation failure state.')
+        }
+      }
       return fail(error, context)
     }
   },

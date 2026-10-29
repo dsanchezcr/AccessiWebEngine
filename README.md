@@ -37,6 +37,8 @@ cp apps/web/.env.example apps/web/.env
 cp apps/api/local.settings.example.json apps/api/local.settings.json
 npm run typecheck
 npm test
+npx playwright install chromium
+npm run test:e2e
 npm run build
 ```
 
@@ -50,6 +52,7 @@ Entra ID B2C configuration uses `ENTRA_B2C_TENANT_NAME`, `ENTRA_B2C_SIGNUP_SIGNI
 
 - `POST /api/v1/scans/web`
 - `POST /api/v1/scans/repo`
+- `GET /api/v1/scans/{scanId}/badge.svg`
 - `POST /api/v1/scans/audio-preview`
 - `POST /api/v1/github/issues`
 - `GET /api/v1/users/me`
@@ -58,7 +61,9 @@ Entra ID B2C configuration uses `ENTRA_B2C_TENANT_NAME`, `ENTRA_B2C_SIGNUP_SIGNI
 - `POST /api/v1/remediate/pull-request`
 - `GET /api/v1/health` (liveness only; it does not check dependencies)
 
-The web scanner rejects non-public destinations, revalidates and pins every redirect, limits page size, and never executes the target page. Its automated baseline is static HTML inspection, not axe-core or a rendered browser audit. Screenshots are optional and supplied by the user; they are not persisted. Screenshot bounds are raw image pixels; without CSS viewport/DPR metadata, the engine does not claim WCAG CSS-pixel target-size conformance. Public scans are bounded to 60 source files and 1.5 MB of repository content.
+The web scanner rejects non-public destinations, revalidates and pins every redirect, limits page size, and never executes the target page. Its automated baseline is static HTML inspection, not a rendered browser audit. Screenshots are optional and supplied by the user; they are not persisted. Screenshot bounds are raw image pixels; without CSS viewport/DPR metadata, the engine does not claim WCAG CSS-pixel target-size conformance. Public scans are bounded to 60 source files and 1.5 MB of repository content.
+
+The report Markdown includes an embeddable score badge backed by the public SVG route. Browser tests capture full-page screenshots for all public routes and a mobile workspace viewport, and run axe-core against WCAG 2.2 A/AA/AAA tags. The remediation API persists workflow states (`ingest`, `audit`, `synthesize_patch`, `verify`, `document`, `submit_pr`, `complete` or `failed`) in Cosmos DB; it remains a synchronous request rather than a background job API. Successful PRs include `ACCESSIBILITY_REMEDIATION_REPORT.md` in the repository root.
 
 ## Scope and deployment
 
@@ -77,4 +82,4 @@ The web scanner rejects non-public destinations, revalidates and pins every redi
 | `VITE_API_BASE_URL` | Frontend build | API base URL; deployment workflows set this from Bicep output |
 | `VITE_ENTRA_B2C_TENANT_NAME`, `VITE_ENTRA_B2C_CLIENT_ID`, `VITE_ENTRA_B2C_SIGNUP_SIGNIN_POLICY`, `VITE_ENTRA_B2C_PROFILE_EDIT_POLICY`, `VITE_ENTRA_B2C_REDIRECT_URI`, `VITE_ENTRA_B2C_API_SCOPE` | Frontend build | Public identity-provider configuration only |
 
-Production deployment still requires configuring Azure credentials, Entra B2C, Meta/GitHub permissions, GitHub environment protection, retention operations, and validating model endpoint compatibility. This repository does not yet include a browser-based Playwright/axe suite. Review each generated PR before merging; see the linked platform, security, and privacy documentation.
+Production deployment still requires configuring Azure credentials, Entra B2C, Meta/GitHub permissions, GitHub environment protection, retention operations, and validating model endpoint compatibility. Review each generated PR before merging; see the linked platform, security, and privacy documentation.

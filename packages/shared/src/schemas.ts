@@ -22,14 +22,14 @@ export const AuditFindingSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
   description: z.string(),
-  filePath: z.string().nullable().optional(),
-  selector: z.string().nullable().optional(),
-  startLine: z.number().int().positive().nullable().optional(),
-  endLine: z.number().int().positive().nullable().optional(),
+  filePath: z.string().nullable().optional().transform((value) => value ?? undefined),
+  selector: z.string().nullable().optional().transform((value) => value ?? undefined),
+  startLine: z.number().int().positive().nullable().optional().transform((value) => value ?? undefined),
+  endLine: z.number().int().positive().nullable().optional().transform((value) => value ?? undefined),
   wcagCriterion: z.string().min(1),
   severity: FindingSeveritySchema,
-  codeSnippet: z.string().nullable().optional(),
-  suggestedFixCode: z.string().nullable().optional(),
+  codeSnippet: z.string().nullable().optional().transform((value) => value ?? undefined),
+  suggestedFixCode: z.string().nullable().optional().transform((value) => value ?? undefined),
 }).strict()
 
 export const AccessibilityAuditReportSchema = z.object({
@@ -50,7 +50,7 @@ export const AccessibilityAuditReportSchema = z.object({
       width: z.number().nonnegative(),
       height: z.number().nonnegative(),
     }).strict(),
-    issue: z.string().nullable().optional(),
+    issue: z.string().nullable().optional().transform((value) => value ?? undefined),
   }).strict()).optional(),
 }).strict()
 

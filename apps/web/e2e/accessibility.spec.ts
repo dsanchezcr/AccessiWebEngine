@@ -24,6 +24,18 @@ for (const route of publicRoutes) {
       fullPage: true,
     })
   })
+
+  for (const theme of ['dark', 'high-contrast']) {
+    test(`${route.path} passes axe in ${theme} theme`, async ({ page }) => {
+      await page.goto(route.path)
+      await page.getByRole('combobox', { name: 'Theme' }).selectOption(theme)
+
+      const results = await new AxeBuilder({ page })
+        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'wcag2aaa', 'wcag21aaa', 'wcag22aaa'])
+        .analyze()
+      expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([])
+    })
+  }
 }
 
 test('workspace stays usable on mobile and has a screenshot', async ({ page }, testInfo) => {

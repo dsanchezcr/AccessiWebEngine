@@ -27,7 +27,7 @@ The demo shows a real public URL audit and repository audit, reviews the generat
 - **Open weights:** repository analysis can be routed to a configured open-weights endpoint.
 - **Creative/multimodal:** screenshot analysis and optional audio/image model integrations can be enabled when supported endpoints and credentials are available.
 - **Agentic use case:** remediation planning, patch validation, documentation, and PR publication form a multi-step workflow; emphasize that the PR remains subject to human review.
-- **Virality:** audit summaries and sharing actions are available in the product; verify the live build before claiming a specific share card or badge feature.
+- **Virality:** audit summaries, share actions, and a score badge in embeddable Markdown are available in the product.
 
 The prize alignment is a positioning draft, not a claim that every bonus requirement has been independently validated.
 
