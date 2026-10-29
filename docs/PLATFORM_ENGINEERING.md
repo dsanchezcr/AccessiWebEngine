@@ -95,6 +95,7 @@ The Bicep Function App uses a system-assigned identity for Cosmos access in all 
 
 - `.github/workflows/pr-ephemeral.yml` runs typecheck, unit tests, builds, and Bicep compilation. For same-repository PRs it deploys an isolated Azure resource group, publishes the API and frontend, checks `/api/v1/health`, and posts preview URLs. On PR close it requests asynchronous resource-group deletion.
 - `.github/workflows/cd-pipeline.yml` validates once, then calls the reusable `.github/workflows/deploy-stage.yml` for `staging`, `qa`, and `prod` in sequence. GitHub environment rules provide the approval gates.
+- `.github/workflows/codeql.yml` analyzes JavaScript/TypeScript on pushes, PRs, a weekly schedule, and manual dispatch. `.github/workflows/dependency-review.yml` checks PR dependency changes, while `.github/dependabot.yml` schedules npm and GitHub Actions updates.
 - Each environment deployment creates or updates its resources from Bicep before deploying application artifacts. The frontend build receives the deployed Function URL and copies `staticwebapp.config.json` into the SWA artifact.
 
 The current automated checks are TypeScript typechecks, Node tests, production builds, Bicep compilation, and an API health check. This repository does not yet include a browser-based Playwright/axe suite or a dedicated ESLint script; the workflows intentionally do not claim those checks ran.

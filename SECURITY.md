@@ -13,6 +13,7 @@ The browser is an untrusted client. Meta and GitHub credentials, Cosmos access, 
 - **Rate limits:** Scan and remediation quotas are recorded in Cosmos DB. The Functions API hashes the selected forwarded address for anonymous quota keys; forwarded-address behavior depends on the hosting proxy configuration and should be verified before relying on IP quotas as a strong identity boundary.
 - **Secret storage:** Deployment places Meta and GitHub tokens in an RBAC-enabled Key Vault and injects Key Vault references into Function App settings. Managed identity grants the application access to secrets and Cosmos DB. `AZURE_CREDENTIALS` remains a high-impact deployment credential and should be protected and rotated.
 - **Browser response controls:** SWA configuration sets CSP, HSTS, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and a restrictive Permissions Policy.
+- **Supply-chain checks:** `.github/workflows/codeql.yml` runs CodeQL on main pushes, PRs, weekly, and by manual dispatch. `.github/workflows/dependency-review.yml` blocks PR dependency changes with moderate-or-higher known advisories. Dependabot proposes weekly npm and GitHub Actions updates; review and test each update before merging.
 - **Infrastructure identity:** Bicep assigns Key Vault Secrets User and Cosmos DB Built-in Data Contributor roles to the Function App system-assigned identity. No Cosmos key is injected into the deployed app.
 
 ## Deployment and operations
@@ -24,6 +25,7 @@ The infrastructure currently uses public Azure endpoints, has no private network
 ## Known limitations and reporting
 
 - Rate limiting and auth controls do not replace edge-level abuse protection or a production API gateway.
+- Dependency review covers changes introduced by a PR; it is not a continuous full dependency vulnerability scan. The currently resolved Azure Identity/MSAL dependency tree has known moderate UUID advisories reported by `npm audit`; do not treat these workflows as having resolved them.
 - Cosmos rate-limit checks are read-then-write, not an atomic distributed counter; concurrent requests can exceed a limit briefly.
 - Anonymous scans are persisted without a user owner, so the authenticated data-deletion route cannot associate them with a person.
 - Security headers and accessibility are not equivalent to a complete security or WCAG audit. Review deployed headers, authentication policy, Azure RBAC, and generated patches before production use.
