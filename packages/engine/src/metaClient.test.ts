@@ -85,7 +85,13 @@ test('Meta client retries transient errors and fails fast without configuration'
   )
 })
 
-test('remediation plans group findings, validate patched syntax, and document criteria', async () => {
+test('remediation plans group findings, validate patched syntax, and document criteria', async (t) => {
+  const previous = process.env.META_ALLOW_AUTONOMOUS_REMEDIATION
+  process.env.META_ALLOW_AUTONOMOUS_REMEDIATION = 'true'
+  t.after(() => {
+    if (previous === undefined) delete process.env.META_ALLOW_AUTONOMOUS_REMEDIATION
+    else process.env.META_ALLOW_AUTONOMOUS_REMEDIATION = previous
+  })
   const calls: string[] = []
   const client = new MetaAiClient({
     apiKey: 'test-key',
