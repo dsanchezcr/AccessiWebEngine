@@ -131,24 +131,6 @@ resource rateLimits 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containe
   }
 }
 
-resource cosmosConnectionSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
-  parent: vault
-  name: 'cosmos-connection-string'
-  properties: {
-    value: account.listConnectionStrings().connectionStrings[0].connectionString
-    attributes: {
-      enabled: true
-    }
-  }
-  dependsOn: [
-    database
-    scans
-    remediations
-    users
-    rateLimits
-  ]
-}
-
 output cosmosAccountName string = account.name
 output cosmosAccountId string = account.id
 output cosmosEndpoint string = account.properties.documentEndpoint
