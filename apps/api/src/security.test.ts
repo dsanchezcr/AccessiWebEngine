@@ -32,7 +32,7 @@ test('GitHub bot issue writes require an exact configured repository allowlist',
   assert.equal(isIssueRepositoryAllowed('example', 'site', 'example/site,other/project'), true)
   assert.equal(isIssueRepositoryAllowed('EXAMPLE', 'SITE', 'example/site'), true)
   assert.equal(isIssueRepositoryAllowed('example', 'site-admin', 'example/site'), false)
-  assert.equal(isIssueRepositoryAllowed('example', 'site', undefined), false)
+  assert.equal(isIssueRepositoryAllowed('example', 'site', ''), false)
 })
 
 test('GitHub bot issue creation is rate-limited per allowlisted repository', () => {

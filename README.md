@@ -23,7 +23,7 @@ The Azure resources and CI/CD workflows are defined under `infra/bicep` and `.gi
 
 - **Web URL audit:** Fetches public HTML, optionally analyzes a user-provided screenshot with SAM, produces a structured WCAG report, and can open a GitHub issue.
 - **Public repository audit:** Reads bounded sets of HTML, TS/TSX, JSX, Vue, Svelte, and CSS files from a public GitHub repository and reports file/line findings.
-- **Private remediation preview:** Requires an Entra ID B2C token, the global `FEATURE_ENABLE_AUTO_PR_PREVIEW` switch, and the user's Cosmos DB preview flag. The GitHub integration creates a branch and pull request with proposed patches and an audit/remediation report.
+- **Private remediation preview:** Requires an Entra ID B2C token, the global `FEATURE_ENABLE_AUTO_PR_PREVIEW` switch, and the user's Cosmos DB preview flag. The GitHub integration creates a branch in a verified bot-owned public fork and proposes an upstream pull request with patches and an audit/remediation report; it never pushes to the upstream repository.
 
 Reports are stored in Cosmos DB; raw HTML and source file contents are only passed through memory for analysis. Generated changes are proposed in a PR and are not merged automatically.
 
@@ -44,7 +44,7 @@ npm run build
 
 Run the frontend with `npm run dev`. Run the API with `npm run start:api` after building the workspace. Configure secrets and service endpoints in the API's local settings or deployment environment; only the `VITE_*` settings belong in the browser app. Never place Meta, GitHub, or Cosmos credentials in Vite environment variables.
 
-The Meta API must provide an OpenAI-compatible `/chat/completions` endpoint with JSON Schema response formatting and image inputs for SAM. Set `META_API_BASE_URL`, `META_API_KEY`, `META_MUSE_CODE_MODEL`, `META_SAM_MODEL`, `META_MUSE_WONDER_MODEL`, and `META_MUSE_IMAGE_MODEL` in the API environment. Set `META_ANALYSIS_PROVIDER=open-weights` with `META_MUSE_SPARK_OPEN_URL` to route repository audits to the configured open-weights endpoint. GitHub issue creation requires `GITHUB_BOT_TOKEN` and an explicit comma-separated `GITHUB_ISSUE_ALLOWED_REPOSITORIES` allowlist using `owner/repo` entries; it is disabled when the allowlist is empty and limited to five issues per repository per minute per Functions worker. Public scans are limited to 10/hour per IP, authenticated scans to 30/hour per user, and preview remediations to 5/hour per user through the Cosmos `rateLimits` container. Cosmos uses `COSMOS_DB_ENDPOINT` and managed identity outside local development; set `COSMOS_DB_CONNECTION_STRING` for local development. The database is `accessiweb-db`, and its `scans`, `remediations`, `users`, and `rateLimits` containers are initialized on first use.
+The Meta API must provide an OpenAI-compatible `/chat/completions` endpoint with JSON Schema response formatting and image inputs for SAM. Set `META_API_BASE_URL`, `META_API_KEY`, `META_MUSE_CODE_MODEL`, `META_SAM_MODEL`, `META_MUSE_WONDER_MODEL`, and `META_MUSE_IMAGE_MODEL` in the API environment. Set `META_ANALYSIS_PROVIDER=open-weights` with `META_MUSE_SPARK_OPEN_URL`, the partner's dedicated `META_MUSE_SPARK_OPEN_API_KEY`, and `META_MUSE_SPARK_OPEN_MODEL` to route repository audits to the configured open-weights endpoint; the Meta API key is not used for this route. GitHub issue creation requires `GITHUB_BOT_TOKEN` and an explicit comma-separated `GITHUB_ISSUE_ALLOWED_REPOSITORIES` allowlist using `owner/repo` entries; it is disabled when the allowlist is empty and limited to five issues per repository per minute per Functions worker. Public scans and generated audio/images share a 10/hour per-IP quota; authenticated scans and generated audio/images share a 30/hour per-user quota. Preview remediations have a separate 5/hour per-user quota through the Cosmos `rateLimits` container. Cosmos uses `COSMOS_DB_ENDPOINT` and managed identity outside local development; set `COSMOS_DB_CONNECTION_STRING` for local development. The database is `accessiweb-db`, and its `scans`, `remediations`, `users`, and `rateLimits` containers are initialized on first use.
 
 Entra ID B2C configuration uses `ENTRA_B2C_TENANT_NAME`, `ENTRA_B2C_SIGNUP_SIGNIN_POLICY`, `ENTRA_B2C_CLIENT_ID`, and the exact expected `ENTRA_B2C_ISSUER`. The frontend also needs the corresponding `VITE_ENTRA_B2C_*` settings, an optional `VITE_ENTRA_B2C_PROFILE_EDIT_POLICY`, and an API scope if the API is registered as a protected resource. Configure `FEATURE_ENABLE_AUTO_PR_PREVIEW=true` only for an explicitly enabled preview deployment. `POST /api/v1/users/me/preview-access` requires a valid bearer token and either a server-side `META_PREVIEW_INVITE_CODE` or `previewAccessApproved: true` on the user's Cosmos DB profile. If unset, `META-HACKATHON-2026` is accepted only when `APP_ENV`/`NODE_ENV` is not production; production has no default invite code. The older `/api/v1/preview/unlock` route remains as an alias.
 
@@ -54,6 +54,7 @@ Entra ID B2C configuration uses `ENTRA_B2C_TENANT_NAME`, `ENTRA_B2C_SIGNUP_SIGNI
 - `POST /api/v1/scans/repo`
 - `GET /api/v1/scans/{scanId}/badge.svg`
 - `POST /api/v1/scans/audio-preview`
+- `POST /api/v1/images/accessibility-placeholder`
 - `POST /api/v1/github/issues`
 - `GET /api/v1/users/me`
 - `DELETE /api/v1/users/me/data`
@@ -74,6 +75,7 @@ The report Markdown includes an embeddable score badge backed by the public SVG 
 | `META_API_KEY`, `META_API_BASE_URL` | API | Meta-compatible model endpoint credentials and URL |
 | `META_MUSE_CODE_MODEL`, `META_SAM_MODEL`, `META_MUSE_WONDER_MODEL`, `META_MUSE_IMAGE_MODEL` | API | Model identifiers |
 | `META_ANALYSIS_PROVIDER`, `META_MUSE_SPARK_OPEN_URL` | API | Optional repository-audit open-weights route |
+| `META_MUSE_SPARK_OPEN_API_KEY`, `META_MUSE_SPARK_OPEN_MODEL` | API | Dedicated partner credentials and model identifier; never reuse the Meta API key |
 | `GITHUB_BOT_TOKEN`, `GITHUB_ISSUE_ALLOWED_REPOSITORIES` | API | GitHub write integration and explicit issue allowlist |
 | `COSMOS_DB_ENDPOINT` | API | Cosmos endpoint; deployed apps use their system-assigned identity |
 | `COSMOS_DB_CONNECTION_STRING` | API local development only | Local Cosmos connection-string fallback |

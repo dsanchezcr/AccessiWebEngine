@@ -22,6 +22,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Package and smoke-test standalone API
+        run: node .github/scripts/package-api.mjs
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - uses: actions/upload-artifact@v4

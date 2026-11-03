@@ -26,6 +26,8 @@ param deploymentPrincipalType string = 'ServicePrincipal'
 @secure()
 param metaApiKey string
 @secure()
+param metaMuseSparkOpenApiKey string = ''
+@secure()
 param githubBotToken string
 @secure()
 param metaPreviewInviteCode string
@@ -33,6 +35,7 @@ param metaPreviewInviteCode string
 param metaApiBaseUrl string = ''
 param metaAnalysisProvider string = 'meta'
 param metaMuseSparkOpenUrl string = ''
+param metaMuseSparkOpenModel string = ''
 param metaMuseCodeModel string = 'muse-code'
 param metaSamModel string = 'sam-3.1'
 param metaMuseWonderModel string = 'muse-wonder'
@@ -68,6 +71,7 @@ module keyVault 'modules/keyvault.bicep' = {
     deploymentPrincipalId: deploymentPrincipalId
     deploymentPrincipalType: deploymentPrincipalType
     metaApiKey: metaApiKey
+    metaMuseSparkOpenApiKey: metaMuseSparkOpenApiKey
     githubBotToken: githubBotToken
     metaPreviewInviteCode: metaPreviewInviteCode
   }
@@ -120,6 +124,8 @@ module functionApp 'modules/functionapp.bicep' = {
     metaApiBaseUrl: metaApiBaseUrl
     metaAnalysisProvider: metaAnalysisProvider
     metaMuseSparkOpenUrl: metaMuseSparkOpenUrl
+    metaMuseSparkOpenModel: metaMuseSparkOpenModel
+    enableMuseSparkOpenApiKey: !empty(metaMuseSparkOpenApiKey)
     metaMuseCodeModel: metaMuseCodeModel
     metaSamModel: metaSamModel
     metaMuseWonderModel: metaMuseWonderModel

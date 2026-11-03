@@ -10,6 +10,8 @@ param staticWebAppOrigin string
 param metaApiBaseUrl string
 param metaAnalysisProvider string
 param metaMuseSparkOpenUrl string
+param metaMuseSparkOpenModel string
+param enableMuseSparkOpenApiKey bool
 param metaMuseCodeModel string
 param metaSamModel string
 param metaMuseWonderModel string
@@ -102,9 +104,9 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     FUNCTIONS_EXTENSION_VERSION: '~4'
     FUNCTIONS_WORKER_RUNTIME: 'node'
     AzureWebJobsStorage: storageConnectionString
-    SCM_DO_BUILD_DURING_DEPLOYMENT: 'true'
-    ENABLE_ORYX_BUILD: 'true'
-    WEBSITE_RUN_FROM_PACKAGE: '1'
+    // The Functions action sets a package URL for Linux Consumption; local package mode ('1') is unsupported.
+    SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
+    ENABLE_ORYX_BUILD: 'false'
     APP_ENV: environment == 'prod' ? 'production' : environment
     APPLICATIONINSIGHTS_CONNECTION_STRING: applicationInsightsConnectionString
     COSMOS_DB_ENDPOINT: cosmosEndpoint
@@ -112,6 +114,10 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     META_API_BASE_URL: metaApiBaseUrl
     META_ANALYSIS_PROVIDER: metaAnalysisProvider
     META_MUSE_SPARK_OPEN_URL: metaMuseSparkOpenUrl
+    META_MUSE_SPARK_OPEN_MODEL: metaMuseSparkOpenModel
+    ...(enableMuseSparkOpenApiKey ? {
+      META_MUSE_SPARK_OPEN_API_KEY: '@Microsoft.KeyVault(SecretUri=${keyVaultSecretUri}/meta-muse-spark-open-api-key/)'
+    } : {})
     META_MUSE_CODE_MODEL: metaMuseCodeModel
     META_SAM_MODEL: metaSamModel
     META_MUSE_WONDER_MODEL: metaMuseWonderModel

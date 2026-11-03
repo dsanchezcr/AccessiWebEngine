@@ -3,9 +3,9 @@ import test from 'node:test'
 import { canActivatePreview, getPreviewInviteCode, isValidPreviewInvite } from './previewAccess.ts'
 
 test('preview invite defaults only outside production', () => {
-  assert.equal(getPreviewInviteCode('development', undefined), 'META-HACKATHON-2026')
-  assert.equal(getPreviewInviteCode('demo', undefined), 'META-HACKATHON-2026')
-  assert.equal(getPreviewInviteCode('production', undefined), undefined)
+  assert.equal(getPreviewInviteCode('development', ''), 'META-HACKATHON-2026')
+  assert.equal(getPreviewInviteCode('demo', ''), 'META-HACKATHON-2026')
+  assert.equal(getPreviewInviteCode('production', ''), undefined)
   assert.equal(getPreviewInviteCode('prod', 'custom-secret'), 'custom-secret')
 })
 

@@ -71,6 +71,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 
 [data-theme='dark'] {
   .button-primary { background: #075e50; color: #fff; }
+  .button-primary:hover:not(:disabled) { background: #06483d; }
+  .error-message { color: #ffb8ad; }
   .button-secondary { color: #ecf4ef; }
   .mode-switch button[aria-selected='true'] { color: #ecf4ef; }
   .brand-mark { color: #0e2923; background: #69d6b3; }

@@ -71,7 +71,9 @@ const pages: Record<string, { title: string; intro: string; sections: Array<[str
 }
 
 async function getAccessToken(instance: ReturnType<typeof useMsal>['instance'], account: ReturnType<typeof useMsal>['accounts'][number]) {
+  if (!account) throw new Error('Sign in again before continuing.')
   const result = await instance.acquireTokenSilent({ ...loginRequest, scopes: [apiScope], account })
+  if (!result.accessToken) throw new Error('Could not acquire an API access token. Sign in again before continuing.')
   return result.accessToken
 }
 
@@ -117,7 +119,7 @@ function Header({ theme, onThemeChange }: { theme: Theme; onThemeChange: (theme:
           </button>
         </div>
       ) : (
-        <a className="button button-quiet" href="#preview" onClick={() => window.dispatchEvent(new Event('accessiweb:preview'))}>
+        <a className="button button-quiet" href="/?preview=1#preview">
           Sign in
         </a>
       )}
@@ -149,6 +151,8 @@ function Report({
   const [shareCard, setShareCard] = useState<{ dataUrl: string; altText: string }>()
   const [imageLoading, setImageLoading] = useState(false)
   const [screenshotDimensions, setScreenshotDimensions] = useState<{ width: number; height: number }>()
+  const { instance, accounts } = useMsal()
+  const authenticated = useIsAuthenticated()
   useEffect(() => () => {
     if (audioUrls) {
       URL.revokeObjectURL(audioUrls.unpatched)
@@ -157,7 +161,7 @@ function Report({
   }, [audioUrls])
   const report = result.report
   const findings = report.findings ?? []
-  const badgeUrl = new URL(apiUrl(`v1/scans/${encodeURIComponent(result.scanId)}/badge.svg`), window.location.origin).href
+  const badgeUrl = new URL(apiUrl(`scans/${encodeURIComponent(result.scanId)}/badge.svg`), window.location.origin).href
   const markdown = [
     '# AccessiWeb accessibility audit',
     '',
@@ -235,13 +239,14 @@ function Report({
     setAudioLoading(true)
     setMessage('')
     try {
+      const token = authenticated ? await getAccessToken(instance, accounts[0]) : undefined
       const preview = await apiRequest<{
         unpatchedAudioBase64: string
         remediatedAudioBase64: string
         mimeType: string
       }>(
         'scans/audio-preview',
-        undefined,
+        token,
         { method: 'POST', body: JSON.stringify({ auditSummary: report.summary }) },
       )
       const mimeType = ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm', 'audio/mp4'].includes(preview.mimeType)
@@ -275,9 +280,10 @@ function Report({
     setImageLoading(true)
     setMessage('')
     try {
+      const token = authenticated ? await getAccessToken(instance, accounts[0]) : undefined
       const generated = await apiRequest<{ imageBase64: string; mimeType: string; altText: string }>(
         'images/accessibility-placeholder',
-        undefined,
+        token,
         {
           method: 'POST',
           body: JSON.stringify({
@@ -420,7 +426,7 @@ function Report({
 }
 
 function Workspace() {
-  const [mode, setMode] = useState<ScanMode>('web')
+  const [mode, setMode] = useState<ScanMode>(() => new URLSearchParams(window.location.search).get('preview') === '1' ? 'preview' : 'web')
   const [targetUrl, setTargetUrl] = useState('')
   const [viewport, setViewport] = useState<'desktop' | 'mobile'>('desktop')
   const [targetRepoUrl, setTargetRepoUrl] = useState('')
@@ -445,9 +451,9 @@ function Workspace() {
   }
 
   useEffect(() => {
-    const openPreview = () => setMode('preview')
-    window.addEventListener('accessiweb:preview', openPreview)
-    return () => window.removeEventListener('accessiweb:preview', openPreview)
+    if (new URLSearchParams(window.location.search).get('preview') === '1') {
+      document.getElementById('tab-preview')?.focus()
+    }
   }, [])
 
   useEffect(() => {
@@ -487,9 +493,13 @@ function Workspace() {
             screenshotMimeType: screenshotMimeType || undefined,
           }
         : { repoUrl }
+      const token = authenticated ? await getAccessToken(instance, accounts[0]) : undefined
       const response = await fetch(apiUrl(endpoint), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: 'Bearer ' + token } : {}),
+        },
         body: JSON.stringify(payload),
       })
       const body = await response.json() as ScanResult & { error?: string }

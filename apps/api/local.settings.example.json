@@ -1,5 +1,8 @@
 {
   "IsEncrypted": false,
+  "Host": {
+    "CORS": "http://localhost:5173,http://127.0.0.1:5173"
+  },
   "Values": {
     "FUNCTIONS_WORKER_RUNTIME": "node",
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
@@ -9,6 +12,8 @@
     "META_SAM_MODEL": "sam-3.1",
     "META_ANALYSIS_PROVIDER": "meta",
     "META_MUSE_SPARK_OPEN_URL": "",
+    "META_MUSE_SPARK_OPEN_API_KEY": "",
+    "META_MUSE_SPARK_OPEN_MODEL": "",
     "META_MUSE_WONDER_MODEL": "muse-wonder",
     "META_MUSE_IMAGE_MODEL": "muse-image",
     "GITHUB_BOT_TOKEN": "",

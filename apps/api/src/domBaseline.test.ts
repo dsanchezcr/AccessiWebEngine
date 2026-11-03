@@ -25,6 +25,13 @@ test('static DOM baseline reports language, labels, images, headings, and click 
   assert.match(baseline.note, /does not execute page scripts/)
 })
 
+test('heading levels preserve source order and count only upward skips', () => {
+  const baseline = collectDomBaseline('<h1>Title</h1><h3>Skipped level</h3><h2>Section</h2>')
+
+  assert.deepEqual(baseline.checks.headingLevels, [1, 3, 2])
+  assert.equal(baseline.checks.headingOrderSkips, 1)
+})
+
 test('data attributes are not mistaken for accessibility attributes', () => {
   const baseline = collectDomBaseline(`
     <html data-lang="en"><mainland><img data-alt="logo">

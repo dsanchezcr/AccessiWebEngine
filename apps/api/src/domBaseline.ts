@@ -51,9 +51,7 @@ const allStartTags = (html: string): string[] => [
 export const collectDomBaseline = (html: string) => {
   const images = startTags(html, 'img')
   const controls = ['input', 'select', 'textarea'].flatMap((name) => startTags(html, name))
-  const headings = [1, 2, 3, 4, 5, 6].flatMap((level) =>
-    startTags(html, `h${level}`).map(() => level),
-  )
+  const headings = startTags(html, 'h[1-6]').map((tag) => Number(tag[2]))
   const tags = allStartTags(html)
   const labelledIds = new Set(
     startTags(html, 'label').map((label) => exactAttributeValue(label, 'for')).filter(Boolean),

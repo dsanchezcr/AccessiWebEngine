@@ -5,6 +5,8 @@ param deploymentPrincipalType string
 @secure()
 param metaApiKey string
 @secure()
+param metaMuseSparkOpenApiKey string
+@secure()
 param githubBotToken string
 @secure()
 param metaPreviewInviteCode string
@@ -31,7 +33,7 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     enableRbacAuthorization: true
     enableSoftDelete: true
     softDeleteRetentionInDays: 90
-    enablePurgeProtection: environment == 'prod'
+    enablePurgeProtection: environment == 'prod' ? true : null
     publicNetworkAccess: 'Enabled'
   }
 }
@@ -51,6 +53,20 @@ resource metaSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   name: 'meta-api-key'
   properties: {
     value: metaApiKey
+    attributes: {
+      enabled: true
+    }
+  }
+  dependsOn: [
+    deploymentSecretsRole
+  ]
+}
+
+resource museSparkOpenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(metaMuseSparkOpenApiKey)) {
+  parent: vault
+  name: 'meta-muse-spark-open-api-key'
+  properties: {
+    value: metaMuseSparkOpenApiKey
     attributes: {
       enabled: true
     }

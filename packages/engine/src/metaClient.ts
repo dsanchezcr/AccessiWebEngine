@@ -7,6 +7,9 @@ import type {
 } from '../../shared/src/types.js'
 import { AccessibilityAuditReportSchema, RemediationPlanSchema, SourceCodeAuditReportSchema } from '../../shared/src/schemas.ts'
 import ts from 'typescript'
+import { parse as parseHtml, type DefaultTreeAdapterTypes } from 'parse5'
+import { compileTemplate, parse as parseVue } from '@vue/compiler-sfc'
+import { parse as parseSvelte } from 'svelte/compiler'
 
 type JsonSchema = {
   type: 'object'
@@ -21,6 +24,8 @@ type MetaClientOptions = {
   museCodeModel?: string
   samModel?: string
   museSparkOpenUrl?: string
+  museSparkOpenApiKey?: string
+  museSparkOpenModel?: string
   museWonderModel?: string
   museImageModel?: string
   fetcher?: typeof fetch
@@ -160,24 +165,51 @@ export const wrapUntrustedInput = (label: string, value: unknown): string => {
 
 const validateHtml = (content: string): string[] => {
   const errors: string[] = []
-  const stack: string[] = []
   const voidElements = new Set([
     'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link',
     'meta', 'param', 'source', 'track', 'wbr',
   ])
-  const tags = content.matchAll(/<!--[\s\S]*?-->|<\/?[A-Za-z][^>]*>/g)
+  const optionalEndTags = new Set([
+    'html', 'head', 'body', 'li', 'dt', 'dd', 'p', 'rt', 'rp', 'optgroup',
+    'option', 'colgroup', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th',
+  ])
+  const rawTextElements = new Set([
+    'script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes', 'plaintext', 'noscript',
+  ])
+  const closingOffsets = new Set<number>()
+  const rawTextRanges: Array<[number, number]> = []
+  const document = parseHtml(content, {
+    sourceCodeLocationInfo: true,
+    onParseError: (error) => {
+      if (error.code !== 'missing-doctype') errors.push(`Invalid HTML: ${error.code}.`)
+    },
+  })
+  const visit = (node: DefaultTreeAdapterTypes.Node) => {
+    if ('tagName' in node) {
+      const location = node.sourceCodeLocation
+      if (location?.endTag) closingOffsets.add(location.endTag.startOffset)
+      const selfClosingForeignElement = node.namespaceURI !== 'http://www.w3.org/1999/xhtml' &&
+        location?.startTag && /\/>$/.test(content.slice(location.startTag.startOffset, location.startTag.endOffset))
+      if (location?.startTag && !location.endTag &&
+        !selfClosingForeignElement && !voidElements.has(node.tagName) && !optionalEndTags.has(node.tagName)) {
+        errors.push(`Unclosed HTML tag: ${node.tagName}.`)
+      }
+      if (location?.startTag && rawTextElements.has(node.tagName)) {
+        rawTextRanges.push([location.startTag.endOffset, location.endTag?.startOffset ?? content.length])
+      }
+    }
+    if ('childNodes' in node) node.childNodes.forEach(visit)
+    if ('content' in node) visit(node.content)
+  }
+  visit(document)
+  const tags = content.matchAll(/<!--[\s\S]*?-->|<![^>]*>|<\/?[A-Za-z](?:[^>"']|"[^"]*"|'[^']*')*>/g)
   for (const match of tags) {
     const tag = match[0]
-    if (tag.startsWith('<!--')) continue
-    const name = tag.match(/^<\/?([A-Za-z][\w:-]*)/)?.[1]?.toLowerCase()
-    if (!name) continue
-    if (tag.startsWith('</')) {
-      if (stack.pop() !== name) errors.push(`Unexpected closing </${name}> tag.`)
-    } else if (!voidElements.has(name) && !tag.endsWith('/>')) {
-      stack.push(name)
+    if (tag.startsWith('</') && !closingOffsets.has(match.index) &&
+      !rawTextRanges.some(([start, end]) => match.index >= start && match.index < end)) {
+      errors.push(`Unexpected closing ${tag} tag.`)
     }
   }
-  if (stack.length) errors.push(`Unclosed HTML tags: ${stack.slice(-5).join(', ')}.`)
   return errors
 }
 
@@ -192,76 +224,6 @@ const validateBalancedCss = (content: string): string[] => {
     if (depth < 0) return ['Unexpected closing CSS brace.']
   }
   return depth === 0 ? [] : ['Unclosed CSS block.']
-}
-
-const extractComponentBlocks = (
-  source: string,
-): { tagName: 'script' | 'style'; content: string; scriptExtension?: 'ts' | 'tsx' | 'js' | 'jsx'; error?: string }[] => {
-  const blocks: { tagName: 'script' | 'style'; content: string; scriptExtension?: 'ts' | 'tsx' | 'js' | 'jsx'; error?: string }[] = []
-  const lowerSource = source.toLowerCase()
-  let cursor = 0
-
-  while (cursor < source.length) {
-    const open = source.indexOf('<', cursor)
-    if (open < 0) break
-    if (source.startsWith('<!--', open)) {
-      const commentEnd = source.indexOf('-->', open + 4)
-      cursor = commentEnd < 0 ? source.length : commentEnd + 3
-      continue
-    }
-
-    const match = source.slice(open).match(/^<([a-z][\w:-]*)\b/i)
-    if (!match) {
-      cursor = open + 1
-      continue
-    }
-    const tagName = match[1].toLowerCase()
-    const startAttributes = open + match[0].length
-    let quote = ''
-    let tagEnd = startAttributes
-    for (; tagEnd < source.length; tagEnd += 1) {
-      const character = source[tagEnd]
-      if (quote) {
-        if (character === quote) quote = ''
-      } else if (character === '"' || character === "'") {
-        quote = character
-      } else if (character === '>') {
-        break
-      }
-    }
-    if (tagEnd >= source.length) break
-    cursor = tagEnd + 1
-
-    if ((tagName !== 'script' && tagName !== 'style') || source[tagEnd - 1] === '/') continue
-    const closeToken = `</${tagName}`
-    let closeStart = cursor
-    while ((closeStart = lowerSource.indexOf(closeToken, closeStart)) >= 0) {
-      const delimiter = source[closeStart + closeToken.length]
-      if (delimiter === '>' || /\s/.test(delimiter ?? '')) break
-      closeStart += closeToken.length
-    }
-    if (closeStart < 0) {
-      blocks.push({ tagName, content: '', error: `Unclosed <${tagName}> block.` })
-      break
-    }
-    const closeEnd = source.indexOf('>', closeStart + closeToken.length)
-    if (closeEnd < 0) {
-      blocks.push({ tagName, content: '', error: `Unclosed </${tagName}> tag.` })
-      break
-    }
-    const attributes = source.slice(startAttributes, tagEnd)
-    const language = attributes.match(/\blang\s*=\s*["']([^"']+)["']/i)?.[1]?.toLowerCase()
-    const scriptExtension = language === 'tsx' ? 'tsx' : language === 'jsx' ? 'jsx'
-      : language === 'js' || language === 'javascript' ? 'js'
-        : 'ts'
-    blocks.push({
-      tagName,
-      content: source.slice(cursor, closeStart),
-      ...(tagName === 'script' ? { scriptExtension } : {}),
-    })
-    cursor = closeEnd + 1
-  }
-  return blocks
 }
 
 export const validateSourceSyntax = (filePath: string, content: string): string[] => {
@@ -285,19 +247,30 @@ export const validateSourceSyntax = (filePath: string, content: string): string[
   if (extension === 'css') return validateBalancedCss(content)
   if (extension === 'vue' || extension === 'svelte') {
     const errors: string[] = []
-    let scriptIndex = 0
-    for (const block of extractComponentBlocks(content)) {
-      if (block.error) {
-        errors.push(block.error)
-      } else if (block.tagName === 'script') {
-        errors.push(...validateSourceSyntax(
-          `${filePath}.${scriptIndex === 0 ? block.scriptExtension : `script${scriptIndex}.${block.scriptExtension}`}`,
-          block.content,
-        ))
-        scriptIndex += 1
+    try {
+      if (extension === 'vue') {
+        const parsed = parseVue(content, { filename: filePath })
+        errors.push(...parsed.errors.map((error) => typeof error === 'string' ? error : error.message))
+        if (parsed.descriptor.template && !parsed.descriptor.template.src) {
+          const compiled = compileTemplate({
+            source: parsed.descriptor.template.content,
+            filename: filePath,
+            id: 'syntax-validation',
+            compilerOptions: { expressionPlugins: ['typescript'] },
+          })
+          errors.push(...compiled.errors.map((error) => typeof error === 'string' ? error : error.message))
+        }
+        for (const block of [parsed.descriptor.script, parsed.descriptor.scriptSetup]) {
+          if (!block) continue
+          const extension = ['ts', 'tsx', 'jsx'].includes(block.lang ?? '') ? block.lang : 'js'
+          errors.push(...validateSourceSyntax(`${filePath}.${extension}`, block.content))
+        }
+        for (const block of parsed.descriptor.styles) errors.push(...validateBalancedCss(block.content))
       } else {
-        errors.push(...validateBalancedCss(block.content))
+        parseSvelte(content, { filename: filePath, modern: true })
       }
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : 'Invalid component syntax.')
     }
     return errors
   }
@@ -315,6 +288,8 @@ export class MetaAiClient {
   private readonly museCodeModel: string
   private readonly samModel: string
   private readonly museSparkOpenUrl: string
+  private readonly museSparkOpenApiKey: string
+  private readonly museSparkOpenModel: string
   private readonly museWonderModel: string
   private readonly museImageModel: string
   private readonly fetcher: typeof fetch
@@ -326,6 +301,8 @@ export class MetaAiClient {
     this.museCodeModel = options.museCodeModel ?? process.env.META_MUSE_CODE_MODEL ?? 'muse-code'
     this.samModel = options.samModel ?? process.env.META_SAM_MODEL ?? 'sam-3.1'
     this.museSparkOpenUrl = options.museSparkOpenUrl ?? process.env.META_MUSE_SPARK_OPEN_URL ?? ''
+    this.museSparkOpenApiKey = options.museSparkOpenApiKey ?? process.env.META_MUSE_SPARK_OPEN_API_KEY ?? ''
+    this.museSparkOpenModel = options.museSparkOpenModel ?? process.env.META_MUSE_SPARK_OPEN_MODEL ?? ''
     this.museWonderModel = options.museWonderModel ?? process.env.META_MUSE_WONDER_MODEL ?? 'muse-wonder'
     this.museImageModel = options.museImageModel ?? process.env.META_MUSE_IMAGE_MODEL ?? 'muse-image'
     this.fetcher = options.fetcher ?? fetch
@@ -378,7 +355,7 @@ export class MetaAiClient {
           required: ['segments'],
           additionalProperties: false,
         },
-        this.baseUrl,
+        'meta',
         [screenshotDataUrl],
       ).then((result) => result.segments as AccessibilityAuditReport['visualSegments'])
     }
@@ -411,15 +388,12 @@ export class MetaAiClient {
   }
 
   async analyzeRepositoryWithOpenWeights(repoUrl: string, fileTree: RepoFile[]): Promise<SourceCodeAuditReport> {
-    if (!this.museSparkOpenUrl) {
-      throw new Error('Open-weights analysis is not configured. Set META_MUSE_SPARK_OPEN_URL.')
-    }
     const report = await this.request<AccessibilityAuditReport>(
-      this.museCodeModel,
+      this.museSparkOpenModel,
       'Audit these repository source files for WCAG 2.2 defects and return exact file/line findings using the requested JSON schema.',
       { untrustedRepositoryData: wrapUntrustedInput('repository-source', { repoUrl, files: fileTree }) },
       auditSchema,
-      this.museSparkOpenUrl,
+      'open-weights',
     )
     return SourceCodeAuditReportSchema.parse({ ...report, repoUrl })
   }
@@ -473,6 +447,7 @@ export class MetaAiClient {
     RemediationPlanSchema.parse(result)
     if (
       result.patches.length !== groups.fileGroups.length ||
+      new Set(result.patches.map((patch) => patch.filePath)).size !== result.patches.length ||
       result.patches.some((patch) => !groups.fileGroups.some((group) => group.filePath === patch.filePath))
     ) {
       throw new Error('The remediation patch set does not match the planned source files.')
@@ -566,10 +541,15 @@ export class MetaAiClient {
     prompt: string,
     input: unknown,
     schema: JsonSchema,
-    endpoint = this.baseUrl,
+    provider: 'meta' | 'open-weights' = 'meta',
     images: string[] = [],
   ): Promise<T> {
-    if (!this.apiKey || !endpoint) {
+    const endpoint = provider === 'open-weights' ? this.museSparkOpenUrl : this.baseUrl
+    const apiKey = provider === 'open-weights' ? this.museSparkOpenApiKey : this.apiKey
+    if (provider === 'open-weights' && (!apiKey || !endpoint || !model)) {
+      throw new Error('Open-weights analysis is not configured. Set META_MUSE_SPARK_OPEN_URL, META_MUSE_SPARK_OPEN_API_KEY and META_MUSE_SPARK_OPEN_MODEL.')
+    }
+    if (!apiKey || !endpoint) {
       throw new Error('Meta API is not configured. Set META_API_KEY and META_API_BASE_URL.')
     }
 
@@ -578,8 +558,9 @@ export class MetaAiClient {
       try {
         const response = await this.fetcher(`${endpoint.replace(/\/+$/, '')}/chat/completions`, {
           method: 'POST',
+          redirect: 'error',
           headers: {
-            Authorization: 'Bearer ' + this.apiKey,
+            Authorization: 'Bearer ' + apiKey,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({

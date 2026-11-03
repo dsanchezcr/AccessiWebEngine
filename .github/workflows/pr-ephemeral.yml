@@ -43,6 +43,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Package and smoke-test standalone API
+        run: node .github/scripts/package-api.mjs
       - run: az bicep build --file infra/bicep/main.bicep --stdout > /dev/null
 
   deploy:
@@ -52,30 +54,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    env:
-      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
-      META_API_KEY: ${{ secrets.META_API_KEY }}
-      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-      META_PREVIEW_INVITE_CODE: ${{ secrets.META_PREVIEW_INVITE_CODE }}
-      AZURE_DEPLOYMENT_PRINCIPAL_ID: ${{ vars.AZURE_DEPLOYMENT_PRINCIPAL_ID }}
-      META_API_BASE_URL: ${{ vars.META_API_BASE_URL }}
-      META_ANALYSIS_PROVIDER: ${{ vars.META_ANALYSIS_PROVIDER }}
-      META_MUSE_SPARK_OPEN_URL: ${{ vars.META_MUSE_SPARK_OPEN_URL }}
-      META_MUSE_CODE_MODEL: ${{ vars.META_MUSE_CODE_MODEL }}
-      META_SAM_MODEL: ${{ vars.META_SAM_MODEL }}
-      META_MUSE_WONDER_MODEL: ${{ vars.META_MUSE_WONDER_MODEL }}
-      META_MUSE_IMAGE_MODEL: ${{ vars.META_MUSE_IMAGE_MODEL }}
-      GITHUB_ISSUE_ALLOWED_REPOSITORIES: ${{ vars.GITHUB_ISSUE_ALLOWED_REPOSITORIES }}
-      ENTRA_B2C_TENANT_NAME: ${{ vars.ENTRA_B2C_TENANT_NAME }}
-      ENTRA_B2C_CLIENT_ID: ${{ vars.ENTRA_B2C_CLIENT_ID }}
-      ENTRA_B2C_POLICY_NAME: ${{ vars.ENTRA_B2C_POLICY_NAME }}
-      ENTRA_B2C_ISSUER: ${{ vars.ENTRA_B2C_ISSUER }}
-      FEATURE_ENABLE_AUTO_PR_PREVIEW: ${{ vars.FEATURE_ENABLE_AUTO_PR_PREVIEW }}
-      VITE_ENTRA_B2C_TENANT_NAME: ${{ vars.ENTRA_B2C_TENANT_NAME }}
-      VITE_ENTRA_B2C_CLIENT_ID: ${{ vars.ENTRA_B2C_CLIENT_ID }}
-      VITE_ENTRA_B2C_SIGNUP_SIGNIN_POLICY: ${{ vars.ENTRA_B2C_POLICY_NAME }}
-      VITE_ENTRA_B2C_PROFILE_EDIT_POLICY: ${{ vars.ENTRA_B2C_PROFILE_EDIT_POLICY }}
-      VITE_ENTRA_B2C_API_SCOPE: ${{ vars.VITE_ENTRA_B2C_API_SCOPE }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -85,6 +63,12 @@ jobs:
       - run: npm ci
       - name: Validate deployment configuration
         shell: bash
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          META_API_KEY: ${{ secrets.META_API_KEY }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          AZURE_DEPLOYMENT_PRINCIPAL_ID: ${{ vars.AZURE_DEPLOYMENT_PRINCIPAL_ID }}
+          META_API_BASE_URL: ${{ vars.META_API_BASE_URL }}
         run: |
           set -euo pipefail
           for name in AZURE_CREDENTIALS META_API_KEY BOT_TOKEN AZURE_DEPLOYMENT_PRINCIPAL_ID META_API_BASE_URL; do
@@ -101,9 +85,28 @@ jobs:
         shell: bash
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          META_API_KEY: ${{ secrets.META_API_KEY }}
+          META_MUSE_SPARK_OPEN_API_KEY: ${{ secrets.META_MUSE_SPARK_OPEN_API_KEY }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          META_PREVIEW_INVITE_CODE: ${{ secrets.META_PREVIEW_INVITE_CODE }}
+          AZURE_DEPLOYMENT_PRINCIPAL_ID: ${{ vars.AZURE_DEPLOYMENT_PRINCIPAL_ID }}
+          META_API_BASE_URL: ${{ vars.META_API_BASE_URL }}
+          META_ANALYSIS_PROVIDER: ${{ vars.META_ANALYSIS_PROVIDER }}
+          META_MUSE_SPARK_OPEN_URL: ${{ vars.META_MUSE_SPARK_OPEN_URL }}
+          META_MUSE_SPARK_OPEN_MODEL: ${{ vars.META_MUSE_SPARK_OPEN_MODEL }}
+          META_MUSE_CODE_MODEL: ${{ vars.META_MUSE_CODE_MODEL }}
+          META_SAM_MODEL: ${{ vars.META_SAM_MODEL }}
+          META_MUSE_WONDER_MODEL: ${{ vars.META_MUSE_WONDER_MODEL }}
+          META_MUSE_IMAGE_MODEL: ${{ vars.META_MUSE_IMAGE_MODEL }}
+          GITHUB_ISSUE_ALLOWED_REPOSITORIES: ${{ vars.ISSUE_ALLOWED_REPOSITORIES }}
+          ENTRA_B2C_TENANT_NAME: ${{ vars.ENTRA_B2C_TENANT_NAME }}
+          ENTRA_B2C_CLIENT_ID: ${{ vars.ENTRA_B2C_CLIENT_ID }}
+          ENTRA_B2C_POLICY_NAME: ${{ vars.ENTRA_B2C_POLICY_NAME }}
+          ENTRA_B2C_ISSUER: ${{ vars.ENTRA_B2C_ISSUER }}
+          FEATURE_ENABLE_AUTO_PR_PREVIEW: ${{ vars.FEATURE_ENABLE_AUTO_PR_PREVIEW }}
         run: |
           set -euo pipefail
-          az deployment sub create \
+          outputs="$(az deployment sub create \
             --name "deploy-accessiweb-pr-${PR_NUMBER}" \
             --location eastus2 \
             --template-file infra/bicep/main.bicep \
@@ -112,11 +115,13 @@ jobs:
               prNumber="$PR_NUMBER" \
               deploymentPrincipalId="$AZURE_DEPLOYMENT_PRINCIPAL_ID" \
               metaApiKey="$META_API_KEY" \
+              metaMuseSparkOpenApiKey="${META_MUSE_SPARK_OPEN_API_KEY:-}" \
               githubBotToken="$BOT_TOKEN" \
               metaPreviewInviteCode="${META_PREVIEW_INVITE_CODE:-}" \
               metaApiBaseUrl="${META_API_BASE_URL:-}" \
               metaAnalysisProvider="${META_ANALYSIS_PROVIDER:-meta}" \
               metaMuseSparkOpenUrl="${META_MUSE_SPARK_OPEN_URL:-}" \
+              metaMuseSparkOpenModel="${META_MUSE_SPARK_OPEN_MODEL:-}" \
               metaMuseCodeModel="${META_MUSE_CODE_MODEL:-muse-code}" \
               metaSamModel="${META_SAM_MODEL:-sam-3.1}" \
               metaMuseWonderModel="${META_MUSE_WONDER_MODEL:-muse-wonder}" \
@@ -127,22 +132,30 @@ jobs:
               entraB2cPolicyName="${ENTRA_B2C_POLICY_NAME:-}" \
               entraB2cIssuer="${ENTRA_B2C_ISSUER:-}" \
               featureEnableAutoPrPreview="${FEATURE_ENABLE_AUTO_PR_PREVIEW:-false}" \
-            --query properties.outputs --output json > /tmp/accessiweb-deployment-outputs.json
-          echo "resource_group=$(jq -r '.resourceGroupName.value' /tmp/accessiweb-deployment-outputs.json)" >> "$GITHUB_OUTPUT"
-          echo "api_name=$(jq -r '.functionAppName.value' /tmp/accessiweb-deployment-outputs.json)" >> "$GITHUB_OUTPUT"
-          echo "api_url=$(jq -r '.functionAppUrl.value' /tmp/accessiweb-deployment-outputs.json)" >> "$GITHUB_OUTPUT"
-          echo "swa_name=$(jq -r '.staticWebAppName.value' /tmp/accessiweb-deployment-outputs.json)" >> "$GITHUB_OUTPUT"
-          echo "site_url=$(jq -r '.staticWebAppUrl.value' /tmp/accessiweb-deployment-outputs.json)" >> "$GITHUB_OUTPUT"
+            --query properties.outputs --output json)"
+          echo "resource_group=$(jq -r '.resourceGroupName.value' <<< "$outputs")" >> "$GITHUB_OUTPUT"
+          echo "api_name=$(jq -r '.functionAppName.value' <<< "$outputs")" >> "$GITHUB_OUTPUT"
+          echo "api_url=$(jq -r '.functionAppUrl.value' <<< "$outputs")" >> "$GITHUB_OUTPUT"
+          echo "swa_name=$(jq -r '.staticWebAppName.value' <<< "$outputs")" >> "$GITHUB_OUTPUT"
+          echo "site_url=$(jq -r '.staticWebAppUrl.value' <<< "$outputs")" >> "$GITHUB_OUTPUT"
       - name: Build Azure Function
         run: npm run build --workspace apps/api
+      - name: Package and smoke-test standalone API
+        run: node .github/scripts/package-api.mjs
       - uses: Azure/functions-action@v1
         with:
           app-name: ${{ steps.infra.outputs.api_name }}
-          package: apps/api
-          remote-build: true
+          package: .artifacts/api
+          scm-do-build-during-deployment: false
+          enable-oryx-build: false
       - name: Build and deploy Static Web App
         env:
           VITE_API_BASE_URL: ${{ steps.infra.outputs.api_url }}/api
+          VITE_ENTRA_B2C_TENANT_NAME: ${{ vars.ENTRA_B2C_TENANT_NAME }}
+          VITE_ENTRA_B2C_CLIENT_ID: ${{ vars.ENTRA_B2C_CLIENT_ID }}
+          VITE_ENTRA_B2C_SIGNUP_SIGNIN_POLICY: ${{ vars.ENTRA_B2C_POLICY_NAME }}
+          VITE_ENTRA_B2C_PROFILE_EDIT_POLICY: ${{ vars.ENTRA_B2C_PROFILE_EDIT_POLICY }}
+          VITE_ENTRA_B2C_API_SCOPE: ${{ vars.VITE_ENTRA_B2C_API_SCOPE }}
         run: |
           set -euo pipefail
           npm run build --workspace apps/web
@@ -158,6 +171,7 @@ jobs:
           echo "token=$token" >> "$GITHUB_OUTPUT"
       - uses: Azure/static-web-apps-deploy@v1
         with:
+          action: upload
           azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
           app_location: apps/web/dist
           api_location: ''

@@ -35,10 +35,13 @@ Configure these repository secrets (or environment secrets for permanent tiers):
 | --- | --- |
 | `AZURE_CREDENTIALS` | Service-principal JSON consumed by `azure/login@v2` |
 | `META_API_KEY` | Server-side Meta API authentication; stored in Key Vault by deployment |
+| `META_MUSE_SPARK_OPEN_API_KEY` | Dedicated partner authentication for optional open-weights analysis; stored in Key Vault |
 | `BOT_TOKEN` | Server-side GitHub issue/remediation integration token; stored in Key Vault |
 | `META_PREVIEW_INVITE_CODE` | Optional shared preview invite; stored in Key Vault when set |
 
 GitHub Actions secret names cannot start with `GITHUB_`. Create `BOT_TOKEN` at repository scope for PR deployments and in each permanent environment as needed. Deployment maps it to the API's existing `GITHUB_BOT_TOKEN` runtime setting through Key Vault.
+
+Open-weights analysis requires its own partner API key, URL, and model identifier. Configure `META_MUSE_SPARK_OPEN_API_KEY`, `META_MUSE_SPARK_OPEN_URL`, and `META_MUSE_SPARK_OPEN_MODEL` together before selecting `META_ANALYSIS_PROVIDER=open-weights`; do not reuse `META_API_KEY` for the partner endpoint.
 
 Set the following Actions variables at repository scope for PR deployments and separately in each `staging`, `qa`, and `prod` environment:
 
@@ -48,8 +51,9 @@ Set the following Actions variables at repository scope for PR deployments and s
 | `META_API_BASE_URL` | OpenAI-compatible Meta Model API base URL |
 | `META_ANALYSIS_PROVIDER` | `meta` or `open-weights` |
 | `META_MUSE_SPARK_OPEN_URL` | Optional open-weights endpoint |
+| `META_MUSE_SPARK_OPEN_MODEL` | Partner model identifier; required when open-weights analysis is selected |
 | `META_MUSE_CODE_MODEL`, `META_SAM_MODEL`, `META_MUSE_WONDER_MODEL`, `META_MUSE_IMAGE_MODEL` | Model identifiers (defaults are supplied by Bicep) |
-| `GITHUB_ISSUE_ALLOWED_REPOSITORIES` | Comma-separated `owner/repo` issue-write allowlist |
+| `ISSUE_ALLOWED_REPOSITORIES` | Comma-separated `owner/repo` issue-write allowlist; mapped to the API's `GITHUB_ISSUE_ALLOWED_REPOSITORIES` runtime setting |
 | `ENTRA_B2C_TENANT_NAME` | B2C tenant short name |
 | `ENTRA_B2C_CLIENT_ID` | Client/application ID |
 | `ENTRA_B2C_POLICY_NAME` | Sign-up/sign-in policy |
@@ -99,6 +103,8 @@ The Bicep Function App uses a system-assigned identity for Cosmos access in all 
 - `.github/workflows/cd-pipeline.yml` validates once, including browser accessibility tests and screenshot artifact upload, then calls the reusable `.github/workflows/deploy-stage.yml` for `staging`, `qa`, and `prod` in sequence. GitHub environment rules provide the approval gates.
 - `.github/workflows/codeql.yml` analyzes JavaScript/TypeScript on pushes, PRs, a weekly schedule, and manual dispatch. `.github/workflows/dependency-review.yml` checks PR dependency changes, while `.github/dependabot.yml` schedules npm and GitHub Actions updates.
 - Each environment deployment creates or updates its resources from Bicep before deploying application artifacts. The frontend build receives the deployed Function URL and copies `staticwebapp.config.json` into the SWA artifact.
+
+The API is compiled locally in CI and packaged as a self-contained `.artifacts/api` directory with `host.json`, the compiled API/shared/engine tree, and locked production dependencies. Both deployment workflows smoke-test the package without resolving dependencies from the checkout, then deploy it without a remote build. Deployment credentials and model configuration are scoped to deployment steps rather than inherited by unit tests.
 
 The automated checks include TypeScript typechecks, Node tests, Playwright screenshots and axe-core checks on public pages and the mobile workspace, production builds, Bicep compilation, and an API health check. The browser checks are a regression aid, not proof of complete WCAG conformance; manual keyboard and assistive-technology testing is still required. There is no dedicated ESLint script.
 

@@ -48,7 +48,12 @@ const getDatabase = async () => {
       throw new Error('Cosmos DB is not configured.')
     }
   }
-  databasePromise ??= client.databases.createIfNotExists({ id: 'accessiweb-db' }).then(({ database }) => database)
+  databasePromise ??= client.databases.createIfNotExists({ id: 'accessiweb-db' })
+    .then(({ database }) => database)
+    .catch((error: unknown) => {
+      databasePromise = undefined
+      throw error
+    })
   const database = await databasePromise
   containersPromise ??= Promise.all([
     database.containers.createIfNotExists({ id: 'scans', partitionKey: { paths: ['/scanType'] } }),
