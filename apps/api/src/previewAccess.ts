@@ -7,7 +7,7 @@ export const getPreviewInviteCode = (
   configuredCode = process.env.META_PREVIEW_INVITE_CODE,
 ): string | undefined => {
   if (configuredCode?.trim()) return configuredCode.trim()
-  return ['prod', 'production'].includes(environment.toLowerCase()) ? undefined : demoInviteCode
+  return ['development', 'demo'].includes(environment.toLowerCase()) ? demoInviteCode : undefined
 }
 
 export const isValidPreviewInvite = (providedCode: unknown, configuredCode: string | undefined): boolean => {
