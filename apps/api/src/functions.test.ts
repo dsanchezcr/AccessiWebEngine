@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { beforeEach, mock, test } from 'node:test'
 
@@ -30,6 +31,9 @@ const audit = {
   findings: [{ id: 'finding', wcagCriterion: '1.1.1', severity: 'high', title: 'Image alt', filePath: 'index.html' }],
   summary: 'An image needs alt text.', score: 90,
 }
+const approvedPatchHash = createHash('sha256').update(JSON.stringify([
+  { filePath: 'index.html', content: '<img src="logo.png" alt="Logo">' },
+]), 'utf8').digest('hex')
 const gitWrite = (method: string) => async (params: any) => {
   writes.push({ method, params })
   return { data: { sha: `${method}-sha` } }
@@ -203,7 +207,7 @@ test('public repository scans use the configured bot token', async () => {
 
 test('remediation always writes a verified fork using its returned name, never upstream permissions', async () => {
   authenticated = true
-  const result = await invoke('remediatePullRequest', { repoUrl: 'https://github.com/upstream/site' }, true)
+  const result = await invoke('remediatePullRequest', { repoUrl: 'https://github.com/upstream/site', approvedPatchHash }, true)
   assert.equal(result.status, 201)
   assert.deepEqual(quotas, [{ key: 'remediation:user:test', limit: 5 }])
   assert.equal(forkCalls, 1)
@@ -215,6 +219,17 @@ test('remediation always writes a verified fork using its returned name, never u
   assert.match(pull.head, /^bot:fix\/accessiweb-/)
   assert.equal(pull.head_repo, 'renamed-site')
 })
+
+for (const approval of [undefined, 'incorrect-hash']) {
+  test(`remediation rejects ${approval === undefined ? 'missing' : 'mismatched'} patch approval before publishing content`, async () => {
+    authenticated = true
+    const result = await invoke('remediatePullRequest', {
+      repoUrl: 'https://github.com/upstream/site', approvedPatchHash: approval,
+    }, true)
+    assert.equal(result.status, 412)
+    assert.equal(writes.filter(({ method }) => method !== 'createRef').length, 0)
+  })
+}
 
 test('bot-owned remediation targets fail closed before source or model access', async () => {
   authenticated = true
@@ -236,7 +251,7 @@ for (const failures of [2, 5]) {
       queueMicrotask(callback)
       return {} as NodeJS.Timeout
     })
-    const result = await invoke('remediatePullRequest', { repoUrl: 'https://github.com/upstream/site' }, true)
+    const result = await invoke('remediatePullRequest', { repoUrl: 'https://github.com/upstream/site', approvedPatchHash }, true)
     assert.equal(result.status, failures < 5 ? 201 : 500)
     assert.equal(forkMetadataAttempts, Math.min(failures + 1, 5))
     assert.deepEqual(waits, failures < 5 ? [500, 1000] : [500, 1000, 1500, 2000])

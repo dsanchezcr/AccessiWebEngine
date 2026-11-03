@@ -151,6 +151,7 @@ test('patched source files with syntax errors are rejected', async () => {
 })
 
 test('duplicate patch paths cannot replace another planned file', async () => {
+  process.env.META_ALLOW_AUTONOMOUS_REMEDIATION = 'true'
   const findings = ['first', 'second'].map((id) => ({
     id, title: 'Missing label', description: 'Add a label.', filePath: `${id}.tsx`,
     wcagCriterion: '4.1.2', severity: 'serious' as const,
@@ -176,6 +177,21 @@ test('duplicate patch paths cannot replace another planned file', async () => {
   await assert.rejects(client.generateAutonomousRemediationPlan(
     findings.map((finding) => ({ path: finding.filePath, content: '<button />' })), findings,
   ), /patch set does not match/)
+  assert.equal(calls, 2)
+})
+
+test('autonomous remediation requires explicit opt-in before calling the model', async () => {
+  let calls = 0
+  const client = new MetaAiClient({
+    apiKey: 'test-key', baseUrl: 'https://meta.example/v1',
+    fetcher: async () => { calls += 1; return response({}) },
+  })
+  for (const setting of [undefined, 'false']) {
+    if (setting === undefined) delete process.env.META_ALLOW_AUTONOMOUS_REMEDIATION
+    else process.env.META_ALLOW_AUTONOMOUS_REMEDIATION = setting
+    await assert.rejects(client.generateAutonomousRemediationPlan([], []), /disabled for safety/)
+  }
+  assert.equal(calls, 0)
 })
 
 test('Vue and Svelte script/style blocks parse without stripping template content', () => {
