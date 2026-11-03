@@ -21,24 +21,3 @@ The implementation uses TypeScript npm workspaces, Azure Functions, Cosmos DB, E
 ### Demo — 25%
 
 The demo shows a real public URL audit and repository audit, reviews the generated findings, and demonstrates the GitHub issue flow. If the private preview prerequisites are configured, it also shows authenticated preview enrollment and a generated remediation PR. Keep the report and PR review visible so the audience can distinguish AI suggestions from verified conformance.
-
-## Bonus-prize fit
-
-- **Open weights:** repository analysis can be routed to a configured open-weights endpoint.
-- **Creative/multimodal:** screenshot analysis and optional audio/image model integrations can be enabled when supported endpoints and credentials are available.
-- **Agentic use case:** remediation planning, patch validation, documentation, and PR publication form a multi-step workflow; emphasize that the PR remains subject to human review.
-- **Virality:** audit summaries, share actions, and a score badge in embeddable Markdown are available in the product.
-
-The prize alignment is a positioning draft, not a claim that every bonus requirement has been independently validated.
-
-## Three-minute demo script
-
-1. **0:00–0:25 — Problem and product.** Introduce accessibility debt and the three paths: web audit, repository audit, and gated remediation preview.
-2. **0:25–1:05 — Live web audit.** Enter a public HTTPS page, run the analysis, and point out the score, findings, and optional screenshot context. Explain that this is automated guidance, not a certification.
-3. **1:05–1:45 — Source-code audit.** Scan a public GitHub repository and show file/line-oriented findings. Explain the issue report option and repository allowlist.
-4. **1:45–2:30 — Proposed remediation.** If the preview is enabled, sign in, enroll with the server-side invite or approved account, run remediation, and open the resulting PR. Highlight the diff and report, and state that a human must review it.
-5. **2:30–3:00 — Responsible implementation.** Show the TypeScript/Azure architecture, managed identity and Key Vault configuration, and explain SSRF/rate-limit controls and remaining production validation.
-
-## Before submission
-
-Replace this draft with the exact deployed demo URL, screenshots/video, tested model names, and confirmed outputs. Do not state a score, accessibility conformance, model partnership, or infrastructure deployment as completed unless it has been checked against the live build.
