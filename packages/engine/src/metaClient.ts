@@ -428,6 +428,11 @@ export class MetaAiClient {
     repoFiles: RepoFile[],
     findings: AuditFinding[],
   ): Promise<RemediationPlan> {
+    if (process.env.META_ALLOW_AUTONOMOUS_REMEDIATION !== 'true') {
+      throw new Error(
+        'Autonomous remediation is disabled for safety. Set META_ALLOW_AUTONOMOUS_REMEDIATION=true only in trusted, reviewed environments.',
+      )
+    }
     const byPath = new Map(repoFiles.map((file) => [file.path, file]))
     const groups = await this.request<{
       fileGroups: Array<{ filePath: string; findingIds: string[]; dependencies: string[]; rationale: string }>
