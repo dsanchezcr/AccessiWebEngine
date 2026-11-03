@@ -25,7 +25,9 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.swa.outputs.static_web_app_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -113,6 +115,7 @@ jobs:
           echo "api_name=$(jq -r '.functionAppName.value' <<< "$outputs")" >> "$GITHUB_OUTPUT"
           echo "api_url=$(jq -r '.functionAppUrl.value' <<< "$outputs")" >> "$GITHUB_OUTPUT"
           echo "swa_name=$(jq -r '.staticWebAppName.value' <<< "$outputs")" >> "$GITHUB_OUTPUT"
+          echo "site_url=$(jq -r '.staticWebAppUrl.value' <<< "$outputs")" >> "$GITHUB_OUTPUT"
       - uses: Azure/functions-action@v1
         with:
           app-name: ${{ steps.infra.outputs.api_name }}
@@ -140,7 +143,9 @@ jobs:
           token="$(az staticwebapp secrets list --name "$STATIC_WEB_APP_NAME" --resource-group "$RESOURCE_GROUP" --query properties.apiKey --output tsv)"
           echo "::add-mask::$token"
           echo "token=$token" >> "$GITHUB_OUTPUT"
-      - uses: Azure/static-web-apps-deploy@v1
+      - name: Deploy Static Web App
+        id: swa
+        uses: Azure/static-web-apps-deploy@v1
         with:
           action: upload
           azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
@@ -148,6 +153,14 @@ jobs:
           api_location: ''
           output_location: ''
           skip_app_build: true
+      - name: Configure and verify frontend CORS
+        env:
+          RESOURCE_GROUP: ${{ steps.infra.outputs.resource_group }}
+          FUNCTION_APP_NAME: ${{ steps.infra.outputs.api_name }}
+          PRIMARY_SITE_URL: ${{ steps.infra.outputs.site_url }}
+          SITE_URL: ${{ steps.swa.outputs.static_web_app_url }}
+          API_URL: ${{ steps.infra.outputs.api_url }}
+        run: bash .github/scripts/configure-web-origin.sh
       - name: Verify health endpoint
         env:
           HEALTH_URL: ${{ steps.infra.outputs.api_url }}/api/v1/health

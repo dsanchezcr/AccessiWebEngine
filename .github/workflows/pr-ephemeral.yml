@@ -51,6 +51,9 @@ jobs:
     needs: verify
     if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    environment:
+      name: pr-${{ github.event.pull_request.number }}
+      url: ${{ steps.swa.outputs.static_web_app_url }}
     permissions:
       contents: read
       pull-requests: write
@@ -169,7 +172,9 @@ jobs:
           token="$(az staticwebapp secrets list --name "$STATIC_WEB_APP_NAME" --resource-group "$RESOURCE_GROUP" --query properties.apiKey --output tsv)"
           echo "::add-mask::$token"
           echo "token=$token" >> "$GITHUB_OUTPUT"
-      - uses: Azure/static-web-apps-deploy@v1
+      - name: Deploy Static Web App preview
+        id: swa
+        uses: Azure/static-web-apps-deploy@v1
         with:
           action: upload
           azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
@@ -177,6 +182,14 @@ jobs:
           api_location: ''
           output_location: ''
           skip_app_build: true
+      - name: Configure and verify frontend CORS
+        env:
+          RESOURCE_GROUP: ${{ steps.infra.outputs.resource_group }}
+          FUNCTION_APP_NAME: ${{ steps.infra.outputs.api_name }}
+          PRIMARY_SITE_URL: ${{ steps.infra.outputs.site_url }}
+          SITE_URL: ${{ steps.swa.outputs.static_web_app_url }}
+          API_URL: ${{ steps.infra.outputs.api_url }}
+        run: bash .github/scripts/configure-web-origin.sh
       - name: Check API health
         env:
           HEALTH_URL: ${{ steps.infra.outputs.api_url }}/api/v1/health
@@ -192,7 +205,7 @@ jobs:
       - name: Post preview links
         uses: actions/github-script@v7
         env:
-          SITE_URL: ${{ steps.infra.outputs.site_url }}
+          SITE_URL: ${{ steps.swa.outputs.static_web_app_url }}
           API_URL: ${{ steps.infra.outputs.api_url }}
           RESOURCE_GROUP: ${{ steps.infra.outputs.resource_group }}
         with:

@@ -70,7 +70,8 @@ export const resolvePublicAddress = async (
   if (addresses.length === 0 || addresses.some((address) => !isPublicIp(address))) {
     throw new Error('The hostname must resolve only to public IP addresses.')
   }
-  return addresses[0]
+  // Linux Functions may not have outbound IPv6, even when DNS returns AAAA records first.
+  return addresses.find((address) => isIP(address) === 4) ?? addresses[0]
 }
 
 export const isIssueRepositoryAllowed = (

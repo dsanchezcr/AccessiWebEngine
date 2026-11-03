@@ -12,7 +12,8 @@ import {
   WebScanRequestSchema,
 } from '../../../packages/shared/src/schemas.js'
 import { renderScoreBadgeSvg } from '../../../packages/shared/src/scoreBadge.js'
-import { MetaAiClient } from '../../../packages/engine/src/metaClient.js'
+import { REPOSITORY_SCAN_LIMITS } from '../../../packages/shared/src/scanLimits.js'
+import { MetaAiClient, MetaApiError } from '../../../packages/engine/src/metaClient.js'
 import { collectDomBaseline } from './domBaseline.js'
 import {
   isIssueRepositoryAllowed,
@@ -53,9 +54,24 @@ class RequestError extends Error {
   }
 }
 
-const fail = (error: unknown, context: InvocationContext): HttpResponseInit => {
-  if (error instanceof RequestError) return json({ error: error.message }, error.status)
-  context.error('AccessiWeb request failed.')
+const fail = (error: unknown, context: InvocationContext, stage = 'request'): HttpResponseInit => {
+  if (error instanceof MetaApiError) {
+    context.error('AccessiWeb model request failed.', { stage, code: error.code, upstreamStatus: error.upstreamStatus })
+    const failures = {
+      not_configured: [503, 'AI analysis is not configured. Contact the operator to check the model endpoint, model name, and credentials.'],
+      unavailable: [503, 'The AI analysis service is temporarily unavailable. Please try again later.'],
+      timeout: [504, 'The AI analysis service timed out. Please try again later.'],
+      request_failed: [502, 'The AI analysis service rejected the scan. Contact the operator to check model access and endpoint compatibility.'],
+      invalid_response: [502, 'The AI analysis service returned an invalid report. Please try again later.'],
+    } as const
+    const [status, message] = failures[error.code]
+    return json({ error: message }, status)
+  }
+  if (error instanceof RequestError) {
+    if (error.status >= 500) context.error('AccessiWeb request failed.', { stage, status: error.status })
+    return json({ error: error.message }, error.status)
+  }
+  context.error('AccessiWeb request failed.', { stage })
   return json({ error: 'The request could not be completed.' }, 500)
 }
 
@@ -227,6 +243,7 @@ const fetchHtml = async (initialUrl: string): Promise<string> => {
     }>((resolve, reject) => {
       const outgoing = request(validated, {
         lookup: lookupPinned,
+        family: isIP(address),
         headers: { 'User-Agent': 'AccessiWebEngine/0.1 accessibility-audit' },
         signal: AbortSignal.timeout(15_000),
       }, (incoming) => {
@@ -272,6 +289,15 @@ const fetchHtml = async (initialUrl: string): Promise<string> => {
       })
       outgoing.on('error', reject)
       outgoing.end()
+    }).catch((error: unknown) => {
+      if (error instanceof RequestError) throw error
+      if (error instanceof Error && (
+        error.name === 'AbortError' || error.name === 'TimeoutError' ||
+        ('code' in error && error.code === 'ETIMEDOUT')
+      )) {
+        throw new RequestError(504, 'The target page took too long to respond. Try again later or choose another page.')
+      }
+      throw new RequestError(502, 'The target page connection failed. Check that the site is publicly reachable and has a valid HTTPS certificate.')
     })
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       if (!response.location || redirects === 3) throw new RequestError(400, 'The target URL has too many redirects.')
@@ -314,6 +340,12 @@ const parseRepoUrl = (value: string): { owner: string; repo: string; url: string
 
 const sourceExtensions = /\.(?:html?|tsx?|jsx?|vue|svelte|css)$/i
 
+const checkRepositorySize = (bytes: number): void => {
+  if (bytes > REPOSITORY_SCAN_LIMITS.maxTotalBytes) {
+    throw new RequestError(413, `Repository source exceeds the ${REPOSITORY_SCAN_LIMITS.maxTotalBytes / 1_000_000} MB (${REPOSITORY_SCAN_LIMITS.maxTotalBytes.toLocaleString('en-US')} bytes) limit per scan. Use a smaller public repository or analyze its deployed web page.`)
+  }
+}
+
 const getRepoFiles = async (
   octokit: Octokit,
   owner: string,
@@ -327,19 +359,25 @@ const getRepoFiles = async (
   const headSha = reference.object.sha
   const { data: commit } = await octokit.git.getCommit({ owner, repo, commit_sha: headSha })
   const tree = await octokit.git.getTree({ owner, repo, tree_sha: commit.tree.sha, recursive: '1' })
-  if (tree.data.truncated) throw new RequestError(413, 'This repository is too large to scan in one request.')
+  if (tree.data.truncated) throw new RequestError(413, 'GitHub returned an incomplete file tree. Use a smaller public repository or analyze its deployed web page.')
   const blobs = tree.data.tree.filter((entry) => entry.type === 'blob' && entry.path && sourceExtensions.test(entry.path))
-  if (blobs.length > 60) throw new RequestError(413, 'This repository has too many source files for a single scan.')
+  if (blobs.length > REPOSITORY_SCAN_LIMITS.maxFiles) {
+    throw new RequestError(413, `This repository has ${blobs.length} supported source files; the limit is ${REPOSITORY_SCAN_LIMITS.maxFiles} per scan. Use a smaller public repository or analyze its deployed web page.`)
+  }
+  checkRepositorySize(blobs.reduce((bytes, entry) => bytes + (entry.size ?? 0), 0))
 
   const files: RepoFile[] = []
   let totalBytes = 0
   for (const entry of blobs) {
-    const { data } = await octokit.repos.getContent({ owner, repo, path: entry.path!, ref: headSha })
-    if (Array.isArray(data) || data.type !== 'file' || data.encoding !== 'base64' || !data.content) continue
+    if (!entry.path || !entry.sha) throw new RequestError(502, 'GitHub returned an incomplete source file reference.')
+    const { data } = await octokit.git.getBlob({ owner, repo, file_sha: entry.sha })
+    if (data.encoding !== 'base64') {
+      throw new RequestError(502, 'GitHub could not return a supported source file. A partial repository scan was not performed.')
+    }
     const content = Buffer.from(data.content, 'base64').toString('utf8')
     totalBytes += Buffer.byteLength(content)
-    if (totalBytes > 1_500_000) throw new RequestError(413, 'Repository source files exceed the scan size limit.')
-    files.push({ path: entry.path!, content })
+    checkRepositorySize(totalBytes)
+    files.push({ path: entry.path, content })
   }
   return { files, headSha, baseBranch, treeSha: commit.tree.sha }
 }
@@ -385,11 +423,14 @@ app.http('webScan', {
   authLevel: 'anonymous',
   route: 'v1/scans/web',
   handler: async (request, context) => {
+    let stage = 'validate_web_scan'
     try {
       const parsed = WebScanRequestSchema.safeParse(await bodyOf<unknown>(request))
       if (!parsed.success) throw new RequestError(400, 'Request body does not match the web scan schema.')
       const body = parsed.data
+      stage = 'web_scan_identity'
       const scanOwner = await optionalScanOwner(request)
+      stage = 'web_scan_quota'
       await consumeScanQuota(request, scanOwner)
       const targetUrl = body.targetUrl
       const issueRepo = body.targetRepoUrl
@@ -405,10 +446,12 @@ app.http('webScan', {
       ) {
         throw new RequestError(400, 'The screenshot must be a valid base64 image smaller than 6 MB.')
       }
+      stage = 'fetch_page'
       const html = await fetchHtml(targetUrl)
       const screenshotDataUrl = screenshotBase64
         ? `data:${screenshotMimeType};base64,${screenshotBase64}`
         : ''
+      stage = 'analyze_page'
       const report = await meta().analyzeWebDomAndVisuals(
         targetUrl,
         html,
@@ -416,10 +459,11 @@ app.http('webScan', {
         collectDomBaseline(html),
         viewport,
       )
+      stage = 'save_web_scan'
       const scanId = await saveScan('WEB_URL', targetUrl, report, scanOwner)
       return json({ scanId, report, ...(issueRepo ? { issueRepoUrl: issueRepo.url } : {}) })
     } catch (error) {
-      return fail(error, context)
+      return fail(error, context, stage)
     }
   },
 })

@@ -27,6 +27,18 @@ test('IP checks reject special-purpose IPv4 and IPv6 addresses', () => {
   assert.equal(isPublicIp('2606:4700:4700::1111'), true)
 })
 
+test('DNS pinning prefers public IPv4 regardless of DNS order without ignoring unsafe answers', async () => {
+  const ipv4 = '93.184.216.34'
+  const ipv6 = '2606:4700:4700::1111'
+  for (const addresses of [[ipv6, ipv4], [ipv4, ipv6]]) {
+    assert.equal(await resolvePublicAddress('public.example', async () => addresses), ipv4)
+  }
+  assert.equal(await resolvePublicAddress('ipv6.example', async () => [ipv6]), ipv6)
+  for (const addresses of [[ipv4, '::1'], [ipv6, '10.0.0.1'], []]) {
+    await assert.rejects(resolvePublicAddress('unsafe.example', async () => addresses), /public IP/)
+  }
+})
+
 test('GitHub bot issue writes require an exact configured repository allowlist', () => {
   assert.equal(isIssueRepositoryAllowed('example', 'site', 'example/site,other/project'), true)
   assert.equal(isIssueRepositoryAllowed('EXAMPLE', 'SITE', 'example/site'), true)

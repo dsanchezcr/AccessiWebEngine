@@ -7,6 +7,7 @@ import type {
   SourceCodeAuditReport,
 } from '../../../packages/shared/src/types'
 import { createScoreBadgeMarkdown } from '../../../packages/shared/src/scoreBadge'
+import { repositoryScanLimitsDescription } from '../../../packages/shared/src/scanLimits'
 import { apiScope, loginRequest, profileEditRequest } from './auth/msalConfig'
 import './App.css'
 
@@ -62,6 +63,7 @@ const pages: Record<string, { title: string; intro: string; sections: Array<[str
     intro: 'Audits follow a transparent pipeline. Meta models assist with analysis and proposed changes; repository writes are gated and reviewed through a pull request.',
     sections: [
       ['1. Ingest', 'Azure Functions validate a public URL or GitHub repository. Page markup and repository files are processed in memory.'],
+      ['Repository scan limits', repositoryScanLimitsDescription],
       ['2. Audit', 'Muse Code returns structured findings; SAM 3.1 can segment user-provided screenshots. Audits can route to Muse Spark Open through a configured partner endpoint.'],
       ['3. Remediate & verify', 'For enabled preview accounts, Muse Code proposes complete file patches and verification notes.'],
       ['4. Submit', 'GitHub Octokit creates a branch and pull request; Cosmos DB stores job/report data. Azure Static Web Apps serves the accessible React workspace. A maintainer reviews changes before merging.'],
@@ -638,6 +640,7 @@ function Workspace() {
                 name="target"
                 type="url"
                 required
+                aria-describedby="scan-target-help"
                 placeholder={mode === 'web' ? 'https://example.com' : 'https://github.com/owner/repository'}
                 value={mode === 'web' ? targetUrl : repoUrl}
                 onChange={(event) => mode === 'web' ? setTargetUrl(event.target.value) : setRepoUrl(event.target.value)}
@@ -711,7 +714,10 @@ function Workspace() {
                 </div>
               </div>
             ) : null}
-            <p className="form-hint">Only public targets are accepted. Source files are processed ephemerally.</p>
+            <p id="scan-target-help" className="form-hint">
+              {mode === 'repo' ? repositoryScanLimitsDescription : 'Only public HTML pages up to 1 MB (1,000,000 bytes) are accepted. The page must respond within 15 seconds per request, with no more than 3 redirects.'}
+              {' '}Source content is processed ephemerally.
+            </p>
             {error ? <p className="error-message" role="alert">{error}</p> : null}
             {loading ? <p role="status" aria-live="polite">Analyzing your target. This may take a little while.</p> : null}
           </form>
@@ -720,6 +726,7 @@ function Workspace() {
             <span className="preview-label">Private preview</span>
             <h3 id="preview-heading">Autonomous remediation, with your review</h3>
             <p>Audit a public repository, prepare accessibility patches, and open a pull request. All changes remain reviewable before merge.</p>
+            <p id="remediation-repo-help" className="form-hint">{repositoryScanLimitsDescription}</p>
             <ol className="walkthrough">
               <li><span>01</span> Review findings</li><li><span>02</span> Generate a proposed patch</li><li><span>03</span> Open a pull request</li>
             </ol>
@@ -730,7 +737,7 @@ function Workspace() {
                 <form className="scan-form" onSubmit={(event) => void submitRemediation(event)}>
                 <label htmlFor="remediation-repo">Public GitHub repository URL</label>
                 <div className="scan-input-row">
-                  <input id="remediation-repo" type="url" required value={repoUrl} onChange={(event) => {
+                  <input id="remediation-repo" type="url" required aria-describedby="remediation-repo-help" value={repoUrl} onChange={(event) => {
                     setRepoUrl(event.target.value)
                     setRemediationReview(undefined)
                   }} placeholder="https://github.com/owner/repository" />

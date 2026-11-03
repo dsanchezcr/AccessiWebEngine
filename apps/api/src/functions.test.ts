@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import type { LookupFunction } from 'node:net'
 import { beforeEach, mock, test } from 'node:test'
+import { MetaApiError } from '../../../packages/engine/src/metaClient.ts'
 
 // npm test builds the API before running these compiled-module tests.
 const compiled = (name: string) => new URL(`../dist/apps/api/src/${name}.js`, import.meta.url).href
@@ -22,6 +24,24 @@ let upstreamReads = 0
 let forkCalls = 0
 let responseStatus = 200
 let responseContentType = 'text/html'
+let responseBody = '<html lang="en"><main>Public page</main></html>'
+let responseError: Error | undefined
+let outgoingError: Error | undefined
+let redirectLocation = 'https://public.example/next'
+let followRedirectWithSuccess = false
+let modelFailure: Error | undefined
+let quotaFailure: Error | undefined
+let storageFailure: Error | undefined
+let repositoryFileCount = 1
+let repositoryContent = '<img src="logo.png">'
+let repositoryFileSize: number | undefined
+let repositoryTreeTruncated = false
+let repositoryEncoding = 'base64'
+let contentReads = 0
+const requestedUrls: string[] = []
+const validatedUrls: string[] = []
+const savedScans: unknown[][] = []
+const errorLogs: unknown[][] = []
 const quotas: Array<{ key: string; limit: number }> = []
 const writes: Array<{ method: string; params: any }> = []
 const issueWrites: Array<{ method: string; params: any }> = []
@@ -61,9 +81,6 @@ class FakeOctokit {
       upstreamReads += 1
       return { data: { private: privateRepository, default_branch: 'main' } }
     },
-    getContent: async () => ({ data: {
-      type: 'file', encoding: 'base64', content: Buffer.from('<img src="logo.png">').toString('base64'),
-    } }),
     createFork: async () => {
       forkCalls += 1
       return { data: { owner: { login: 'bot' }, name: 'renamed-site' } }
@@ -82,7 +99,20 @@ class FakeOctokit {
   git = {
     getRef: async () => ({ data: { object: { sha: sourceSha } } }),
     getCommit: async () => ({ data: { tree: { sha: 'tree-sha' } } }),
-    getTree: async () => ({ data: { tree: [{ type: 'blob', path: 'index.html' }] } }),
+    getTree: async () => ({ data: {
+      truncated: repositoryTreeTruncated,
+      tree: Array.from({ length: repositoryFileCount }, (_, index) => ({
+        type: 'blob', path: index === 0 ? 'index.html' : `source-${index}.tsx`,
+        size: repositoryFileSize, sha: `blob-${index}`,
+      })),
+    } }),
+    getBlob: async ({ file_sha }: { file_sha: string }) => {
+      assert.match(file_sha, /^blob-\d+$/)
+      contentReads += 1
+      return { data: {
+        encoding: repositoryEncoding, content: Buffer.from(repositoryContent).toString('base64'),
+      } }
+    },
     createRef: gitWrite('createRef'),
     createBlob: gitWrite('createBlob'),
     createTree: gitWrite('createTree'),
@@ -98,6 +128,12 @@ class FakeMetaClient {
   generateAudioEmpathyPreview = async () => { modelCalls += 1; return { audioUrl: 'preview' } }
   generateAccessiblePlaceholderImage = async () => { modelCalls += 1; return { imageUrl: 'image' } }
   analyzeRepositorySource = async () => { modelCalls += 1; return audit }
+  analyzeWebDomAndVisuals = async () => {
+    modelCalls += 1
+    if (modelFailure) throw modelFailure
+    const { repoUrl: _repoUrl, ...report } = audit
+    return report
+  }
   generateAutonomousRemediationPlan = async () => ({
     patches: [{
       filePath: 'index.html', content: '<img src="logo.png" alt="Logo">',
@@ -106,18 +142,41 @@ class FakeMetaClient {
     reportMarkdown: 'Added alt text.', verificationNotes: ['Check with a screen reader.'],
   })
 }
-const requestPage = (_url: unknown, _options: unknown, callback: (incoming: any) => void) => {
-  const outgoing = new EventEmitter() as EventEmitter & { end: () => void }
+const requestPage = (url: URL, options: { family: number; lookup: LookupFunction }, callback: (incoming: any) => void) => {
+  requestedUrls.push(url.href)
+  assert.equal(options.family, 4)
+  options.lookup(url.hostname, {}, (error, address, family) => {
+    assert.equal(error, null)
+    assert.equal(address, '93.184.216.34')
+    assert.equal(family, 4)
+  })
+  let destroyed = false
+  const outgoing = new EventEmitter() as EventEmitter & { end: () => void; destroy: (error: Error) => void }
+  outgoing.destroy = (error) => {
+    destroyed = true
+    queueMicrotask(() => outgoing.emit('error', error))
+  }
   outgoing.end = () => {
+    if (outgoingError) {
+      queueMicrotask(() => outgoing.emit('error', outgoingError))
+      return
+    }
     const incoming = new EventEmitter() as any
-    incoming.statusCode = responseStatus
-    incoming.headers = { location: 'https://public.example/next', 'content-type': responseContentType }
+    incoming.statusCode = followRedirectWithSuccess && requestedUrls.length > 1 ? 200 : responseStatus
+    incoming.headers = { location: redirectLocation, 'content-type': responseContentType }
     incoming.resume = () => {
       assert.equal(incoming.listenerCount('error'), 1, 'drained responses must already have an error listener')
     }
     incoming.setEncoding = () => undefined
     callback(incoming)
-    queueMicrotask(() => incoming.emit('error', new Error('Response aborted')))
+    queueMicrotask(() => {
+      if (responseError) {
+        incoming.emit('error', responseError)
+        return
+      }
+      incoming.emit('data', responseBody)
+      if (!destroyed) incoming.emit('end')
+    })
   }
   return outgoing
 }
@@ -128,7 +187,7 @@ mock.module('@octokit/rest', { namedExports: { Octokit: FakeOctokit } })
 mock.module('node:http', { namedExports: { request: requestPage } })
 mock.module('node:https', { namedExports: { request: requestPage } })
 mock.module(new URL('../../../packages/engine/src/metaClient.js', compiled('functions')).href, {
-  namedExports: { MetaAiClient: FakeMetaClient },
+  namedExports: { MetaAiClient: FakeMetaClient, MetaApiError },
 })
 mock.module(compiled('security'), { namedExports: {
   verifyBearerToken: async () => {
@@ -138,15 +197,25 @@ mock.module(compiled('security'), { namedExports: {
   isIssueRepositoryAllowed: (_owner: string, repo: string) =>
     repo === 'site' && issueRepositoryAllowed && remediationRepositoryAllowed,
   resolvePublicAddress: async () => '93.184.216.34',
-  validatePublicUrl: async (value: string) => new URL(value),
+  validatePublicUrl: async (value: string) => {
+    validatedUrls.push(value)
+    const url = new URL(value)
+    if (url.hostname === 'private.example') throw new Error('Private address')
+    return url
+  },
 } })
 mock.module(compiled('store'), { namedExports: {
   consumeRateLimit: async (key: string, limit: number) => {
+    if (quotaFailure) throw quotaFailure
     quotas.push({ key, limit })
     return quotaAllowed
   },
   getOrCreateUser: async () => user,
-  saveScan: async () => 'scan-id',
+  saveScan: async (...args: unknown[]) => {
+    if (storageFailure) throw storageFailure
+    savedScans.push(args)
+    return 'scan-id'
+  },
   getStoredScan: async (id: string) => id === 'scan-id' ? {
     scanType: 'SOURCE_CODE',
     target: 'https://github.com/upstream/site',
@@ -182,6 +251,24 @@ beforeEach(() => {
   forkCalls = 0
   responseStatus = 200
   responseContentType = 'text/html'
+  responseBody = '<html lang="en"><main>Public page</main></html>'
+  responseError = undefined
+  outgoingError = undefined
+  redirectLocation = 'https://public.example/next'
+  followRedirectWithSuccess = false
+  modelFailure = undefined
+  quotaFailure = undefined
+  storageFailure = undefined
+  repositoryFileCount = 1
+  repositoryContent = '<img src="logo.png">'
+  repositoryFileSize = undefined
+  repositoryTreeTruncated = false
+  repositoryEncoding = 'base64'
+  contentReads = 0
+  requestedUrls.length = 0
+  validatedUrls.length = 0
+  savedScans.length = 0
+  errorLogs.length = 0
   quotas.length = 0
   writes.length = 0
   issueWrites.length = 0
@@ -193,7 +280,7 @@ beforeEach(() => {
 const invoke = (name: string, body: unknown, signedIn = false) => handlers.get(name)!({
   headers: new Headers(signedIn ? { authorization: '******', 'x-forwarded-for': '203.0.113.1' } : {}),
   json: async () => body,
-}, { error: () => undefined })
+}, { error: (...args: unknown[]) => errorLogs.push(args) })
 const approveAndPublishRemediation = async (repoUrl: string) => {
   const prepared = await invoke('remediatePullRequest', { repoUrl }, true)
   const review = prepared.jsonBody as {
@@ -249,6 +336,62 @@ test('public repository scans use the configured bot token', async () => {
   assert.equal(result.status, 200)
   assert.deepEqual(clientOptions, [{ auth: 'test-bot-token' }])
   assert.equal(modelCalls, 1)
+})
+
+for (const count of [60, 61]) {
+  test(`repository scan enforces the exact 60-file limit for ${count} source files`, async () => {
+    repositoryFileCount = count
+    const result = await invoke('repositoryScan', { repoUrl: 'https://github.com/upstream/site' })
+    assert.equal(result.status, count === 60 ? 200 : 413)
+    assert.equal(modelCalls, count === 60 ? 1 : 0)
+    assert.equal(contentReads, count === 60 ? 60 : 0)
+    if (count > 60) assert.match(result.jsonBody.error, /61 supported source files; the limit is 60/)
+  })
+}
+
+for (const bytes of [1_500_000, 1_500_001]) {
+  test(`repository scan enforces the decoded UTF-8 size limit at ${bytes} bytes`, async () => {
+    repositoryContent = '\u00e9'.repeat(750_000) + (bytes === 1_500_001 ? 'a' : '')
+    const result = await invoke('repositoryScan', { repoUrl: 'https://github.com/upstream/site' })
+    assert.equal(result.status, bytes === 1_500_000 ? 200 : 413)
+    assert.equal(modelCalls, bytes === 1_500_000 ? 1 : 0)
+    if (bytes > 1_500_000) assert.match(result.jsonBody.error, /1\.5 MB \(1,500,000 bytes\)/)
+  })
+}
+
+test('repository tree metadata rejects oversized files before GitHub can omit their content', async () => {
+  repositoryFileSize = 1_500_001
+  repositoryEncoding = 'none'
+  const result = await invoke('repositoryScan', { repoUrl: 'https://github.com/upstream/site' })
+  assert.equal(result.status, 413)
+  assert.equal(contentReads, 0)
+  assert.equal(modelCalls, 0)
+})
+
+test('repository byte limits apply to combined source rather than each individual file', async () => {
+  repositoryFileCount = 2
+  repositoryContent = 'a'.repeat(750_001)
+  const result = await invoke('repositoryScan', { repoUrl: 'https://github.com/upstream/site' })
+  assert.equal(result.status, 413)
+  assert.equal(contentReads, 2)
+  assert.equal(modelCalls, 0)
+})
+
+test('truncated repository trees are rejected without reading source or calling the model', async () => {
+  repositoryTreeTruncated = true
+  const result = await invoke('repositoryScan', { repoUrl: 'https://github.com/upstream/site' })
+  assert.equal(result.status, 413)
+  assert.match(result.jsonBody.error, /incomplete file tree/)
+  assert.equal(contentReads, 0)
+  assert.equal(modelCalls, 0)
+})
+
+test('unavailable repository file content does not silently produce a partial audit', async () => {
+  repositoryEncoding = 'none'
+  const result = await invoke('repositoryScan', { repoUrl: 'https://github.com/upstream/site' })
+  assert.equal(result.status, 502)
+  assert.equal(modelCalls, 0)
+  assert.equal(savedScans.length, 0)
 })
 
 test('GitHub issues are rendered from a stored scan and use the durable repository quota', async () => {
@@ -450,8 +593,98 @@ for (const [status, contentType] of [[301, 'text/html'], [503, 'text/html'], [20
   test(`HTTP response errors are handled for ${status} ${contentType}`, async () => {
     responseStatus = status
     responseContentType = contentType
+    responseError = new Error('Response aborted')
+    const result = await invoke('webScan', { targetUrl: 'https://public.example' })
+    assert.equal(result.status, 502)
+    assert.match(result.jsonBody.error, /connection failed/)
+    assert.equal(modelCalls, 0)
+  })
+}
+
+test('web scan fetches, analyzes, and persists public HTML using a pinned address', async () => {
+  const result = await invoke('webScan', { targetUrl: 'https://public.example' })
+  assert.equal(result.status, 200)
+  assert.equal(result.jsonBody.scanId, 'scan-id')
+  assert.equal(modelCalls, 1)
+  assert.deepEqual(requestedUrls, ['https://public.example/'])
+  assert.equal(savedScans[0][0], 'WEB_URL')
+})
+
+test('each public redirect is revalidated and pinned before a successful web scan', async () => {
+  responseStatus = 301
+  followRedirectWithSuccess = true
+  const result = await invoke('webScan', { targetUrl: 'https://public.example' })
+  assert.equal(result.status, 200)
+  assert.deepEqual(validatedUrls, ['https://public.example', 'https://public.example/next'])
+  assert.deepEqual(requestedUrls, ['https://public.example/', 'https://public.example/next'])
+})
+
+test('redirects to private destinations are rejected before making a second request', async () => {
+  responseStatus = 302
+  redirectLocation = 'https://private.example/'
+  const result = await invoke('webScan', { targetUrl: 'https://public.example' })
+  assert.equal(result.status, 400)
+  assert.equal(requestedUrls.length, 1)
+  assert.equal(modelCalls, 0)
+})
+
+test('web scans reject more than three redirects', async () => {
+  responseStatus = 302
+  const result = await invoke('webScan', { targetUrl: 'https://public.example' })
+  assert.equal(result.status, 400)
+  assert.equal(requestedUrls.length, 4)
+  assert.equal(modelCalls, 0)
+})
+
+for (const [error, status] of [
+  [Object.assign(new Error('TLS failure with private details'), { code: 'CERT_HAS_EXPIRED' }), 502],
+  [Object.assign(new Error('IPv6 unavailable'), { code: 'ENETUNREACH' }), 502],
+  [Object.assign(new Error('aborted'), { name: 'AbortError' }), 504],
+  [Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }), 504],
+] as const) {
+  test(`web scan maps ${'code' in error ? error.code : error.name} to an actionable ${status} response`, async () => {
+    outgoingError = error
+    const result = await invoke('webScan', { targetUrl: 'https://public.example' })
+    assert.equal(result.status, status)
+    assert.doesNotMatch(JSON.stringify([result, errorLogs]), /private details|IPv6 unavailable/)
+    assert.deepEqual(errorLogs[0][1], { stage: 'fetch_page', status })
+    assert.equal(modelCalls, 0)
+    assert.equal(savedScans.length, 0)
+  })
+}
+
+for (const bytes of [1_000_000, 1_000_001]) {
+  test(`web scan enforces the exact UTF-8 page size limit at ${bytes} bytes`, async () => {
+    responseBody = '\u00e9'.repeat(500_000) + (bytes === 1_000_001 ? 'a' : '')
+    const result = await invoke('webScan', { targetUrl: 'https://public.example' })
+    assert.equal(result.status, bytes === 1_000_000 ? 200 : 413)
+    assert.equal(modelCalls, bytes === 1_000_000 ? 1 : 0)
+  })
+}
+
+for (const [code, status] of [
+  ['not_configured', 503], ['unavailable', 503], ['timeout', 504],
+  ['request_failed', 502], ['invalid_response', 502],
+] as const) {
+  test(`web scan reports model ${code} without exposing upstream content`, async () => {
+    modelFailure = new MetaApiError(code, 'Sensitive upstream response', 400)
+    const result = await invoke('webScan', { targetUrl: 'https://public.example' })
+    assert.equal(result.status, status)
+    assert.match(result.jsonBody.error, /AI analysis/)
+    assert.doesNotMatch(JSON.stringify([result, errorLogs]), /Sensitive upstream response/)
+    assert.deepEqual(errorLogs[0][1], { stage: 'analyze_page', code, upstreamStatus: 400 })
+    assert.equal(savedScans.length, 0)
+  })
+}
+
+for (const stage of ['web_scan_quota', 'save_web_scan']) {
+  test(`unexpected ${stage} failures log the stage without raw content`, async () => {
+    const error = new Error('Sensitive Cosmos details')
+    if (stage === 'web_scan_quota') quotaFailure = error
+    else storageFailure = error
     const result = await invoke('webScan', { targetUrl: 'https://public.example' })
     assert.equal(result.status, 500)
-    assert.equal(modelCalls, 0)
+    assert.deepEqual(errorLogs[0][1], { stage })
+    assert.doesNotMatch(JSON.stringify([result, errorLogs]), /Sensitive Cosmos details|public\.example/)
   })
 }

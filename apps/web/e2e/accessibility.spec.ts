@@ -88,6 +88,48 @@ test('dark primary hover and scan errors retain enhanced text contrast', async (
   expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([])
 })
 
+test('repository analysis explains limits before submission and displays size errors accessibly', async ({ page }) => {
+  const message = 'This repository has 178 supported source files; the limit is 60 per scan. Use a smaller public repository or analyze its deployed web page.'
+  await page.route('**/api/v1/scans/repo', (route) => route.fulfill({
+    status: 413, json: { error: message },
+  }))
+  await page.goto('/')
+  await page.getByRole('tab', { name: 'Repository analysis' }).click()
+  const target = page.getByRole('textbox', { name: 'Public GitHub repository URL', exact: true })
+  await expect(target).toHaveAccessibleDescription(/Up to 60.*1\.5 MB \(1,500,000 bytes\).*20,000 characters/)
+  await expect(page.locator('#scan-target-help')).toBeVisible()
+  await target.fill('https://github.com/example/repository')
+  await page.getByRole('button', { name: 'Analyze', exact: true }).click()
+  await expect(page.getByRole('alert')).toHaveText(message)
+  await expect(page.getByRole('heading', { name: 'Your accessibility report' })).toHaveCount(0)
+  const results = await new AxeBuilder({ page }).analyze()
+  expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([])
+
+  await page.getByRole('tab', { name: 'Autonomous PR' }).click()
+  await expect(page.locator('#remediation-repo-help')).toHaveText(/Up to 60.*1\.5 MB.*20,000 characters/)
+  await page.goto('/how-it-works')
+  await expect(page.getByRole('heading', { name: 'Repository scan limits' })).toBeVisible()
+  await expect(page.getByText(/Up to 60 HTML/)).toBeVisible()
+})
+
+for (const [status, message] of [
+  [502, 'The target page connection failed. Check that the site is publicly reachable and has a valid HTTPS certificate.'],
+  [503, 'The AI analysis service is temporarily unavailable. Please try again later.'],
+  [504, 'The target page took too long to respond. Try again later or choose another page.'],
+] as const) {
+  test(`web analysis displays an actionable ${status} error and allows retry`, async ({ page }) => {
+    await page.route('**/api/v1/scans/web', (route) => route.fulfill({
+      status, json: { error: message },
+    }))
+    await page.goto('/')
+    await page.getByLabel('Web page URL', { exact: true }).fill('https://example.com')
+    await page.getByRole('button', { name: 'Analyze', exact: true }).click()
+    await expect(page.getByRole('alert')).toHaveText(message)
+    await expect(page.getByRole('button', { name: 'Analyze', exact: true })).toBeEnabled()
+    await expect(page.getByRole('heading', { name: 'Your accessibility report' })).toHaveCount(0)
+  })
+}
+
 async function mockMsal(page: Page, tokenFailure = false) {
   await page.route('**/node_modules/.vite/deps/@azure_msal-react.js*', (route) => route.fulfill({
     contentType: 'application/javascript',

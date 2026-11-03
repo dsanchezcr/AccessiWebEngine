@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test, { afterEach, beforeEach } from 'node:test'
-import { MetaAiClient, validateSourceSyntax, wrapUntrustedInput } from './metaClient.ts'
+import { MetaAiClient, MetaApiError, validateSourceSyntax, wrapUntrustedInput } from './metaClient.ts'
 
 let metaEnvironment: Record<string, string | undefined>
 beforeEach(() => {
@@ -83,6 +83,112 @@ test('Meta client retries transient errors and fails fast without configuration'
     unconfigured.analyzeRepositorySource('https://github.com/acme/site', []),
     /META_API_KEY and META_API_BASE_URL/,
   )
+})
+
+for (const [status, code, expectedCalls] of [
+  [400, 'request_failed', 1], [401, 'request_failed', 1],
+  [404, 'request_failed', 1], [429, 'unavailable', 3], [503, 'unavailable', 3],
+] as const) {
+  test(`web analysis classifies model HTTP ${status} without leaking response bodies`, async (t) => {
+    t.mock.method(globalThis, 'setTimeout', (callback: () => void) => {
+      queueMicrotask(callback)
+      return {} as NodeJS.Timeout
+    })
+    let calls = 0
+    const client = new MetaAiClient({
+      apiKey: 'test-key', baseUrl: 'https://meta.example/v1',
+      fetcher: async () => {
+        calls += 1
+        return new Response('Sensitive upstream response', { status })
+      },
+    })
+    await assert.rejects(client.analyzeWebDomAndVisuals('https://example.com', '<main />', '', {}), (error) => {
+      assert.ok(error instanceof MetaApiError)
+      assert.equal(error.code, code)
+      assert.equal(error.upstreamStatus, status)
+      assert.doesNotMatch(error.message, /Sensitive upstream response/)
+      return true
+    })
+    assert.equal(calls, expectedCalls)
+  })
+}
+
+for (const [failure, code] of [
+  [new DOMException('aborted', 'AbortError'), 'timeout'],
+  [new DOMException('timed out', 'TimeoutError'), 'timeout'],
+  [new TypeError('fetch failed'), 'unavailable'],
+] as const) {
+  test(`web analysis retries and classifies model ${failure.name}`, async (t) => {
+    t.mock.method(globalThis, 'setTimeout', (callback: () => void) => {
+      queueMicrotask(callback)
+      return {} as NodeJS.Timeout
+    })
+    let calls = 0
+    const client = new MetaAiClient({
+      apiKey: 'test-key', baseUrl: 'https://meta.example/v1',
+      fetcher: async () => { calls += 1; throw failure },
+    })
+    await assert.rejects(client.analyzeWebDomAndVisuals('https://example.com', '<main />', '', {}), (error) => {
+      assert.ok(error instanceof MetaApiError)
+      assert.equal(error.code, code)
+      return true
+    })
+    assert.equal(calls, 3)
+  })
+}
+
+for (const payload of [
+  'not JSON',
+  'null',
+  '{"choices":[]}',
+  JSON.stringify({ choices: [{ message: { content: 'not JSON' } }] }),
+  JSON.stringify({ choices: [{ message: { content: '{"score":200}' } }] }),
+]) {
+  test(`web analysis rejects invalid model response ${payload}`, async () => {
+    const client = new MetaAiClient({
+      apiKey: 'test-key', baseUrl: 'https://meta.example/v1',
+      fetcher: async () => new Response(payload),
+    })
+    await assert.rejects(client.analyzeWebDomAndVisuals('https://example.com', '<main />', '', {}), (error) => {
+      assert.ok(error instanceof MetaApiError)
+      assert.equal(error.code, 'invalid_response')
+      return true
+    })
+  })
+}
+
+test('invalid screenshot segments fail before the DOM model call', async () => {
+  let calls = 0
+  const client = new MetaAiClient({
+    apiKey: 'test-key', baseUrl: 'https://meta.example/v1',
+    fetcher: async () => { calls += 1; return response({ segments: null }) },
+  })
+  await assert.rejects(client.analyzeWebDomAndVisuals('https://example.com', '<main />', 'image', {}), (error) => {
+    assert.ok(error instanceof MetaApiError)
+    assert.equal(error.code, 'invalid_response')
+    return true
+  })
+  assert.equal(calls, 1)
+})
+
+test('repository model input is bounded to the documented 20,000 characters per file', async () => {
+  let sentContent = ''
+  const client = new MetaAiClient({
+    apiKey: 'test-key', baseUrl: 'https://meta.example/v1',
+    fetcher: async (_input, init) => {
+      const request = JSON.parse(String(init?.body))
+      sentContent = request.messages[1].content
+      return response({
+        summary: 'Bounded audit.', score: 100, findings: [],
+        categoryScores: { perceivable: 100, operable: 100, understandable: 100, robust: 100 },
+      })
+    },
+  })
+  await client.analyzeRepositorySource('https://github.com/acme/site', [{
+    path: 'index.html', content: 'a'.repeat(20_000) + 'BEYOND_FILE_LIMIT',
+  }])
+  assert.ok(sentContent.includes('a'.repeat(20_000)))
+  assert.ok(!sentContent.includes('BEYOND_FILE_LIMIT'))
 })
 
 test('remediation plans group findings, validate patched syntax, and document criteria', async (t) => {
