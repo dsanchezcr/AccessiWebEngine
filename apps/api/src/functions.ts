@@ -1,11 +1,16 @@
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { isIP, type LookupFunction } from 'node:net'
-import { createHash } from 'node:crypto'
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { app, type HttpRequest, type HttpResponseInit, type InvocationContext } from '@azure/functions'
 import { Octokit } from '@octokit/rest'
-import type { AuditFinding, RepoFile } from '../../../packages/shared/src/types.js'
-import { RepositoryScanRequestSchema, WebScanRequestSchema } from '../../../packages/shared/src/schemas.js'
+import type { AuditFinding, RemediationPlan, RepoFile, SourceCodeAuditReport } from '../../../packages/shared/src/types.js'
+import {
+  RemediationPlanSchema,
+  RepositoryScanRequestSchema,
+  SourceCodeAuditReportSchema,
+  WebScanRequestSchema,
+} from '../../../packages/shared/src/schemas.js'
 import { renderScoreBadgeSvg } from '../../../packages/shared/src/scoreBadge.js'
 import { MetaAiClient } from '../../../packages/engine/src/metaClient.js'
 import { collectDomBaseline } from './domBaseline.js'
@@ -27,7 +32,6 @@ import {
   type RemediationRecord,
 } from './store.js'
 import { canActivatePreview, getPreviewInviteCode } from './previewAccess.js'
-import { SourceCodeAuditReportSchema } from '../../../packages/shared/src/schemas.js'
 
 const json = (body: unknown, status = 200): HttpResponseInit => ({
   status,
@@ -67,6 +71,7 @@ const escapeIssueText = (value: string): string =>
     .replace(/https?:\/\//gi, (scheme) => `${scheme.slice(0, -2)}\u200b//`)
     .replace(/@/g, '@\u200b')
     .replace(/[\\`*_{}[\]()#+.!|>~-]/g, '\\$&')
+    .replace(/&/g, '&amp;')
     .replace(/[<>]/g, (character) => character === '<' ? '&lt;' : '&gt;')
     .replace(/\r?\n/g, ' ')
 
@@ -92,6 +97,66 @@ const renderIssueBody = (
   '',
   'Review findings and verify proposed fixes manually before merging.',
 ].join('\n')
+
+const canonicalJson = (value: unknown): string => JSON.stringify(
+  value,
+  (_key, item: unknown) => item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([left], [right]) => left.localeCompare(right)))
+    : item,
+)
+
+const hashApprovedPlan = (plan: unknown): string =>
+  createHash('sha256').update(canonicalJson(plan), 'utf8').digest('hex')
+
+const createApprovalToken = (
+  secret: string,
+  userId: string,
+  repoUrl: string,
+  approvalHash: string,
+  expiresAt: string,
+): string => {
+  const claims = Buffer.from(canonicalJson({ userId, repoUrl, approvalHash, expiresAt }), 'utf8').toString('base64url')
+  const signature = createHmac('sha256', secret).update(claims, 'utf8').digest('base64url')
+  return `${claims}.${signature}`
+}
+
+const isValidApprovalToken = (
+  token: string,
+  secret: string,
+  userId: string,
+  repoUrl: string,
+  approvalHash: string,
+): boolean => {
+  try {
+    const [claims, signature, extra] = token.split('.')
+    if (!claims || !signature || extra !== undefined) return false
+    const expected = createHmac('sha256', secret).update(claims, 'utf8').digest()
+    const provided = Buffer.from(signature, 'base64url')
+    if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) return false
+    const parsed = JSON.parse(Buffer.from(claims, 'base64url').toString('utf8')) as {
+      userId?: unknown
+      repoUrl?: unknown
+      approvalHash?: unknown
+      expiresAt?: unknown
+    }
+    const expiresAt = typeof parsed.expiresAt === 'string' ? Date.parse(parsed.expiresAt) : Number.NaN
+    return parsed.userId === userId &&
+      parsed.repoUrl === repoUrl &&
+      parsed.approvalHash === approvalHash &&
+      Number.isFinite(expiresAt) &&
+      expiresAt > Date.now() &&
+      expiresAt <= Date.now() + 10 * 60 * 1000
+  } catch {
+    return false
+  }
+}
+
+type ApprovedRemediationPlan = {
+  audit: SourceCodeAuditReport
+  plan: RemediationPlan
+  baseSha: string
+  baseBranch: string
+}
 
 const requestUser = async (request: HttpRequest) => {
   let claims: Awaited<ReturnType<typeof verifyBearerToken>>
@@ -546,11 +611,23 @@ app.http('remediatePullRequest', {
     let remediationState: RemediationRecord | undefined
     try {
       const user = await requirePreview(request)
-      if (!await consumeRateLimit(`remediation:user:${user.entraOid}`, 5)) {
+      const body = await bodyOf<{
+        repoUrl?: unknown
+        baseBranch?: unknown
+        targetRepoOwner?: unknown
+        approvedPlan?: unknown
+        approvedPatchHash?: unknown
+        approvalToken?: unknown
+        planId?: unknown
+      }>(request)
+      const stage = body.approvedPlan === undefined ? 'prepare' : 'publish'
+      const repo = parseRepoUrl(ensureString(body.repoUrl, 'repoUrl'))
+      if (!isIssueRepositoryAllowed(repo.owner, repo.repo)) {
+        throw new RequestError(403, 'The bot is not enabled for this repository.')
+      }
+      if (!await consumeRateLimit(`remediation:${stage}:user:${user.entraOid}`, 5)) {
         throw new RequestError(429, 'The hourly remediation limit for this account has been reached.')
       }
-      const body = await bodyOf<{ repoUrl?: unknown; baseBranch?: unknown; targetRepoOwner?: unknown }>(request)
-      const repo = parseRepoUrl(ensureString(body.repoUrl, 'repoUrl'))
       const token = process.env.GITHUB_BOT_TOKEN
       if (!token) throw new RequestError(503, 'GitHub remediation is not configured.')
       const octokit = new Octokit({ auth: token })
@@ -564,6 +641,117 @@ app.http('remediatePullRequest', {
       ) {
         throw new RequestError(403, 'The requested fork owner must be the authenticated GitHub bot account.')
       }
+      let audit: SourceCodeAuditReport
+      let plan: RemediationPlan
+      let patches: RemediationPlan['patches']
+      let headSha: string
+      let treeSha: string
+      let baseBranch: string
+      if (body.approvedPlan === undefined) {
+        if (process.env.META_ALLOW_AUTONOMOUS_REMEDIATION !== 'true') {
+          throw new RequestError(503, 'Autonomous remediation plan generation is disabled.')
+        }
+        const { files, headSha: sourceSha, baseBranch: sourceBranch } = await getRepoFiles(
+          octokit,
+          repo.owner,
+          repo.repo,
+          typeof body.baseBranch === 'string' ? body.baseBranch : undefined,
+        )
+        audit = await meta().analyzeRepositorySource(repo.url, files)
+        if (audit.findings.length === 0) throw new RequestError(400, 'No accessibility findings need remediation.')
+        plan = await meta().generateAutonomousRemediationPlan(files, audit.findings as AuditFinding[])
+        const originalPaths = new Set(files.map((file) => file.path))
+        patches = plan.patches
+        const coveredFindings = new Set(patches.flatMap((patch) => patch.findingIds))
+        if (
+          patches.length === 0 ||
+          new Set(patches.map((patch) => patch.filePath)).size !== patches.length ||
+          patches.some((patch) =>
+            !originalPaths.has(patch.filePath) ||
+            patch.filePath.startsWith('/') ||
+            patch.filePath.includes('\\') ||
+            patch.filePath.split('/').includes('..') ||
+            patch.filePath === 'ACCESSIBILITY_REMEDIATION_REPORT.md' ||
+            patch.content.length > 1_000_000
+          ) ||
+          audit.findings.some((finding) => !coveredFindings.has(finding.id)) ||
+          patches.reduce((size, patch) => size + Buffer.byteLength(patch.content), 0) > 1_500_000 ||
+          Buffer.byteLength(plan.reportMarkdown) > 1_000_000
+        ) {
+          throw new RequestError(502, 'The remediation plan contained an invalid or unsupported file path.')
+        }
+        const approvedPlan: ApprovedRemediationPlan = {
+          audit,
+          plan,
+          baseSha: sourceSha,
+          baseBranch: sourceBranch,
+        }
+        if (Buffer.byteLength(canonicalJson(approvedPlan)) > 4_000_000) {
+          throw new RequestError(502, 'The remediation plan exceeds the review size limit.')
+        }
+        const approvalHash = hashApprovedPlan(approvedPlan)
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
+        return json({
+          stage: 'review',
+          planId: approvalHash,
+          approvedPlan,
+          approvedPatchHash: approvalHash,
+          approvalToken: createApprovalToken(token, user.entraOid, repo.url, approvalHash, expiresAt),
+          expiresAt,
+        })
+      }
+
+      if (!body.approvedPlan || typeof body.approvedPlan !== 'object' || Array.isArray(body.approvedPlan)) {
+        throw new RequestError(400, 'The approved remediation plan is invalid.')
+      }
+      if (Buffer.byteLength(canonicalJson(body.approvedPlan)) > 4_000_000) {
+        throw new RequestError(413, 'The approved remediation plan exceeds the request size limit.')
+      }
+      const candidate = body.approvedPlan as Partial<ApprovedRemediationPlan>
+      const parsedAudit = SourceCodeAuditReportSchema.safeParse(candidate.audit)
+      const parsedPlan = RemediationPlanSchema.safeParse(candidate.plan)
+      if (
+        !parsedAudit.success ||
+        !parsedPlan.success ||
+        typeof candidate.baseSha !== 'string' ||
+        !/^[a-f0-9]{40,64}$/i.test(candidate.baseSha) ||
+        typeof candidate.baseBranch !== 'string' ||
+        candidate.baseBranch.length === 0 ||
+        candidate.baseBranch.length > 255
+      ) {
+        throw new RequestError(400, 'The approved remediation plan is invalid.')
+      }
+      audit = parsedAudit.data
+      plan = parsedPlan.data
+      const approvedPlan: ApprovedRemediationPlan = {
+        audit,
+        plan,
+        baseSha: candidate.baseSha,
+        baseBranch: candidate.baseBranch,
+      }
+      const approvalHash = hashApprovedPlan(approvedPlan)
+      if (
+        typeof body.approvedPatchHash !== 'string' ||
+        body.approvedPatchHash !== approvalHash ||
+        body.planId !== approvalHash ||
+        typeof body.approvalToken !== 'string' ||
+        !isValidApprovalToken(body.approvalToken, token, user.entraOid, repo.url, approvalHash)
+      ) {
+        throw new RequestError(412, 'Review and approve the exact remediation plan before publishing it.')
+      }
+      const current = await getRepoFiles(octokit, repo.owner, repo.repo, approvedPlan.baseBranch)
+      if (current.headSha !== approvedPlan.baseSha) {
+        throw new RequestError(412, 'The repository changed after this plan was prepared. Generate and review a new plan.')
+      }
+      headSha = current.headSha
+      treeSha = current.treeSha
+      baseBranch = current.baseBranch
+      patches = plan.patches
+      const originalPaths = new Set(current.files.map((file) => file.path))
+      if (patches.some((patch) => !originalPaths.has(patch.filePath))) {
+        throw new RequestError(412, 'The approved plan no longer matches the repository files.')
+      }
+
       const timestamp = Date.now()
       const branch = `fix/accessiweb-wcag-remediation-${timestamp}`
       remediationState = {
@@ -575,39 +763,6 @@ app.http('remediatePullRequest', {
         createdAt: new Date(timestamp).toISOString(),
       }
       await saveRemediation(remediationState)
-      const { files, headSha, baseBranch, treeSha } = await getRepoFiles(
-        octokit,
-        repo.owner,
-        repo.repo,
-        typeof body.baseBranch === 'string' ? body.baseBranch : undefined,
-      )
-      remediationState.status = 'audit'
-      await saveRemediation(remediationState)
-      const audit = await meta().analyzeRepositorySource(repo.url, files)
-      if (audit.findings.length === 0) throw new RequestError(400, 'No accessibility findings need remediation.')
-      remediationState.status = 'synthesize_patch'
-      await saveRemediation(remediationState)
-      const plan = await meta().generateAutonomousRemediationPlan(files, audit.findings as AuditFinding[])
-      remediationState.status = 'verify'
-      await saveRemediation(remediationState)
-      const originalPaths = new Set(files.map((file) => file.path))
-      const patches = plan.patches.filter((patch) =>
-        originalPaths.has(patch.filePath) &&
-        !patch.filePath.startsWith('/') &&
-        !patch.filePath.split('/').includes('..') &&
-        patch.filePath !== 'ACCESSIBILITY_REMEDIATION_REPORT.md' &&
-        patch.content.length <= 1_000_000,
-      )
-      const coveredFindings = new Set(patches.flatMap((patch) => patch.findingIds))
-      if (
-        patches.length === 0 ||
-        patches.length !== plan.patches.length ||
-        audit.findings.some((finding) => !coveredFindings.has(finding.id)) ||
-        patches.reduce((size, patch) => size + Buffer.byteLength(patch.content), 0) > 1_500_000 ||
-        Buffer.byteLength(plan.reportMarkdown) > 1_000_000
-      ) {
-        throw new RequestError(502, 'The remediation plan contained an invalid or unsupported file path.')
-      }
 
       const remediationReport = [
         '# Accessibility remediation report',
@@ -691,21 +846,6 @@ app.http('remediatePullRequest', {
         }
       }
       if (lastError) throw lastError
-
-      const canonicalPatchPayload = patches
-        .map((patch) => ({ filePath: patch.filePath, content: patch.content }))
-        .sort((a, b) => a.filePath.localeCompare(b.filePath))
-      const computedPatchHash = createHash('sha256').update(JSON.stringify(canonicalPatchPayload), 'utf8').digest('hex')
-      const approvedPatchHash =
-        typeof (body as { approvedPatchHash?: unknown }).approvedPatchHash === 'string'
-          ? (body as { approvedPatchHash: string }).approvedPatchHash.trim().toLowerCase()
-          : ''
-      if (!approvedPatchHash || approvedPatchHash !== computedPatchHash) {
-        throw new RequestError(
-          412,
-          'Patch approval required: approvedPatchHash must match the exact remediation diff being published.',
-        )
-      }
 
       const entries = await Promise.all(patches.map(async (patch) => {
         const blob = await octokit.git.createBlob({

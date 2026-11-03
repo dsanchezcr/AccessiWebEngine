@@ -1,12 +1,30 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useIsAuthenticated, useMsal } from '@azure/msal-react'
-import type { AccessibilityAuditReport, AuditFinding, SourceCodeAuditReport } from '../../../packages/shared/src/types'
+import type {
+  AccessibilityAuditReport,
+  AuditFinding,
+  RemediationPlan,
+  SourceCodeAuditReport,
+} from '../../../packages/shared/src/types'
 import { createScoreBadgeMarkdown } from '../../../packages/shared/src/scoreBadge'
 import { apiScope, loginRequest, profileEditRequest } from './auth/msalConfig'
 import './App.css'
 
 type ScanMode = 'web' | 'repo' | 'preview'
 type ScanResult = { scanId: string; report: AccessibilityAuditReport | SourceCodeAuditReport; issueRepoUrl?: string }
+type RemediationReview = {
+  planId: string
+  approvedPlan: {
+    audit: SourceCodeAuditReport
+    plan: RemediationPlan
+    baseSha: string
+    baseBranch: string
+  }
+  approvedPatchHash: string
+  approvalToken: string
+  expiresAt: string
+}
+type RemediationRecordResponse = { pullRequestUrl: string }
 type Profile = { featureFlags: { autoRemediationPrPreview: boolean }; email?: string; displayName?: string }
 
 const apiBase = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/+$/, '')
@@ -222,11 +240,7 @@ function Report({
     try {
       const created = await apiRequest<{ issueUrl: string }>('github/issues', undefined, {
         method: 'POST',
-        body: JSON.stringify({
-          repoUrl: repositoryUrl,
-          title: `Accessibility audit: ${findings.length} finding${findings.length === 1 ? '' : 's'}`,
-          body: markdown,
-        }),
+        body: JSON.stringify({ scanId: result.scanId }),
       })
       setIssueUrl(created.issueUrl)
       setMessage('GitHub issue created.')
@@ -397,7 +411,9 @@ function Report({
       <div className="report-actions">
         <button className="button button-secondary" onClick={() => void copyReport()}>Copy Formatted GitHub Issue Markdown</button>
         {repositoryUrl ? <button className="button button-secondary" onClick={openManualIssue}>Open prefilled GitHub issue</button> : null}
-        {repositoryUrl ? <button className="button button-secondary" onClick={() => void createIssue()}>Open issue with bot</button> : null}
+        {repositoryUrl && 'repoUrl' in report
+          ? <button className="button button-secondary" onClick={() => void createIssue()}>Open issue with bot</button>
+          : null}
         <button className="button button-secondary" onClick={() => void generateAudio()} disabled={audioLoading}>
           {audioLoading ? 'Generating audio…' : 'Hear screen-reader preview'}
         </button>
@@ -443,11 +459,14 @@ function Workspace() {
   const [profile, setProfile] = useState<Profile>()
   const [judgeCode, setJudgeCode] = useState('')
   const [previewMessage, setPreviewMessage] = useState('')
+  const [remediationReview, setRemediationReview] = useState<RemediationReview>()
+  const [remediationLoading, setRemediationLoading] = useState(false)
 
   const selectMode = (nextMode: ScanMode) => {
     setMode(nextMode)
     setError('')
     setResult(undefined)
+    setRemediationReview(undefined)
   }
 
   useEffect(() => {
@@ -531,15 +550,44 @@ function Workspace() {
 
   const submitRemediation = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    setRemediationLoading(true)
+    setRemediationReview(undefined)
     try {
       const token = await getAccessToken(instance, accounts[0])
-      const response = await apiRequest<{ pullRequestUrl: string }>('remediate/pull-request', token, {
+      const response = await apiRequest<RemediationReview>('remediate/pull-request', token, {
         method: 'POST',
         body: JSON.stringify({ repoUrl }),
       })
-      setPreviewMessage(`Pull request created: ${response.pullRequestUrl}`)
+      setRemediationReview(response)
+      setPreviewMessage('Review the exact proposed changes below before approving publication.')
     } catch (cause) {
       setPreviewMessage(cause instanceof Error ? cause.message : 'Remediation could not be started.')
+    } finally {
+      setRemediationLoading(false)
+    }
+  }
+
+  const approveRemediation = async () => {
+    if (!remediationReview) return
+    setRemediationLoading(true)
+    try {
+      const token = await getAccessToken(instance, accounts[0])
+      const response = await apiRequest<RemediationRecordResponse>('remediate/pull-request', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          repoUrl,
+          planId: remediationReview.planId,
+          approvedPlan: remediationReview.approvedPlan,
+          approvedPatchHash: remediationReview.approvedPatchHash,
+          approvalToken: remediationReview.approvalToken,
+        }),
+      })
+      setPreviewMessage(`Pull request created: ${response.pullRequestUrl}`)
+      setRemediationReview(undefined)
+    } catch (cause) {
+      setPreviewMessage(cause instanceof Error ? cause.message : 'Remediation could not be published.')
+    } finally {
+      setRemediationLoading(false)
     }
   }
 
@@ -678,13 +726,53 @@ function Workspace() {
             {!authenticated ? (
               <button className="button button-primary" onClick={() => void login()}>Sign in with Entra ID B2C</button>
             ) : profile?.featureFlags.autoRemediationPrPreview ? (
-              <form className="scan-form" onSubmit={(event) => void submitRemediation(event)}>
+              <>
+                <form className="scan-form" onSubmit={(event) => void submitRemediation(event)}>
                 <label htmlFor="remediation-repo">Public GitHub repository URL</label>
                 <div className="scan-input-row">
-                  <input id="remediation-repo" type="url" required value={repoUrl} onChange={(event) => setRepoUrl(event.target.value)} placeholder="https://github.com/owner/repository" />
-                  <button className="button button-primary" type="submit">Create remediation PR</button>
+                  <input id="remediation-repo" type="url" required value={repoUrl} onChange={(event) => {
+                    setRepoUrl(event.target.value)
+                    setRemediationReview(undefined)
+                  }} placeholder="https://github.com/owner/repository" />
+                  <button className="button button-primary" type="submit" disabled={remediationLoading}>
+                    {remediationLoading ? 'Preparing review…' : 'Prepare remediation review'}
+                  </button>
                 </div>
-              </form>
+                </form>
+                {remediationReview ? (
+                <section className="remediation-review" aria-labelledby="remediation-review-heading">
+                  <h4 id="remediation-review-heading">Review the exact proposed changes</h4>
+                  <p>{remediationReview.approvedPlan.audit.summary}</p>
+                  <p>
+                    Base branch: <code>{remediationReview.approvedPlan.baseBranch}</code> ·
+                    Approval expires {new Date(remediationReview.expiresAt).toLocaleTimeString()}
+                  </p>
+                  <p>Plan ID: <code>{remediationReview.planId.slice(0, 16)}</code></p>
+                  <ul>
+                    {remediationReview.approvedPlan.audit.findings.map((finding) => (
+                      <li key={finding.id}>{finding.wcagCriterion} · {finding.title}</li>
+                    ))}
+                  </ul>
+                  {remediationReview.approvedPlan.plan.patches.map((patch) => (
+                    <details key={patch.filePath}>
+                      <summary>Review {patch.filePath}</summary>
+                      <h5>Proposed diff</h5>
+                      <pre><code>{patch.diff}</code></pre>
+                      <h5>Complete updated file</h5>
+                      <pre><code>{patch.content}</code></pre>
+                    </details>
+                  ))}
+                  <div className="report-actions">
+                    <button className="button button-primary" type="button" onClick={() => void approveRemediation()} disabled={remediationLoading}>
+                      {remediationLoading ? 'Publishing…' : 'Approve reviewed plan and create pull request'}
+                    </button>
+                    <button className="button button-secondary" type="button" onClick={() => setRemediationReview(undefined)} disabled={remediationLoading}>
+                      Discard plan
+                    </button>
+                  </div>
+                </section>
+                ) : null}
+              </>
             ) : (
               <>
                 <button className="button button-primary" onClick={() => void login()}>Sign in / Request preview access</button>

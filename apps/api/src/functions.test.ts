@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { beforeEach, mock, test } from 'node:test'
 
@@ -10,12 +9,14 @@ let quotaAllowed = true
 let authenticated = false
 let privateRepository = false
 let issueRepositoryAllowed = true
+let remediationRepositoryAllowed = true
 let forkOwner = 'bot'
 let forkPrivate = false
 let forkParent: string | undefined = 'upstream/site'
 let forkIsFork = true
 let forkMetadataFailures = 0
 let forkMetadataAttempts = 0
+let sourceSha = 'a'.repeat(40)
 let modelCalls = 0
 let upstreamReads = 0
 let forkCalls = 0
@@ -30,15 +31,14 @@ const user = {
   featureFlags: { autoRemediationPrPreview: true },
 }
 const audit = {
+  repoUrl: 'https://github.com/upstream/site',
   findings: [{
     id: 'finding', wcagCriterion: '1.1.1', severity: 'serious', title: 'Image alt',
     description: 'An image needs alt text.', filePath: 'index.html',
   }],
   summary: 'An image needs alt text.', score: 90,
+  categoryScores: { perceivable: 90, operable: 90, understandable: 90, robust: 90 },
 }
-const approvedPatchHash = createHash('sha256').update(JSON.stringify([
-  { filePath: 'index.html', content: '<img src="logo.png" alt="Logo">' },
-]), 'utf8').digest('hex')
 const gitWrite = (method: string) => async (params: any) => {
   writes.push({ method, params })
   return { data: { sha: `${method}-sha` } }
@@ -80,7 +80,7 @@ class FakeOctokit {
     },
   }
   git = {
-    getRef: async () => ({ data: { object: { sha: 'head-sha' } } }),
+    getRef: async () => ({ data: { object: { sha: sourceSha } } }),
     getCommit: async () => ({ data: { tree: { sha: 'tree-sha' } } }),
     getTree: async () => ({ data: { tree: [{ type: 'blob', path: 'index.html' }] } }),
     createRef: gitWrite('createRef'),
@@ -99,7 +99,10 @@ class FakeMetaClient {
   generateAccessiblePlaceholderImage = async () => { modelCalls += 1; return { imageUrl: 'image' } }
   analyzeRepositorySource = async () => { modelCalls += 1; return audit }
   generateAutonomousRemediationPlan = async () => ({
-    patches: [{ filePath: 'index.html', content: '<img src="logo.png" alt="Logo">', findingIds: ['finding'] }],
+    patches: [{
+      filePath: 'index.html', content: '<img src="logo.png" alt="Logo">',
+      diff: '--- a/index.html\n+++ b/index.html', findingIds: ['finding'],
+    }],
     reportMarkdown: 'Added alt text.', verificationNotes: ['Check with a screen reader.'],
   })
 }
@@ -132,8 +135,8 @@ mock.module(compiled('security'), { namedExports: {
     if (!authenticated) throw new Error('Invalid token')
     return { sub: 'test' }
   },
-  consumeIssueWriteQuota: () => true,
-  isIssueRepositoryAllowed: () => issueRepositoryAllowed,
+  isIssueRepositoryAllowed: (_owner: string, repo: string) =>
+    repo === 'site' && issueRepositoryAllowed && remediationRepositoryAllowed,
   resolvePublicAddress: async () => '93.184.216.34',
   validatePublicUrl: async (value: string) => new URL(value),
 } })
@@ -166,12 +169,14 @@ beforeEach(() => {
   authenticated = false
   privateRepository = false
   issueRepositoryAllowed = true
+  remediationRepositoryAllowed = true
   forkOwner = 'bot'
   forkPrivate = false
   forkParent = 'upstream/site'
   forkIsFork = true
   forkMetadataFailures = 0
   forkMetadataAttempts = 0
+  sourceSha = 'a'.repeat(40)
   modelCalls = 0
   upstreamReads = 0
   forkCalls = 0
@@ -183,11 +188,28 @@ beforeEach(() => {
   clientOptions.length = 0
   process.env.GITHUB_BOT_TOKEN = 'test-bot-token'
   process.env.FEATURE_ENABLE_AUTO_PR_PREVIEW = 'true'
+  process.env.META_ALLOW_AUTONOMOUS_REMEDIATION = 'true'
 })
 const invoke = (name: string, body: unknown, signedIn = false) => handlers.get(name)!({
   headers: new Headers(signedIn ? { authorization: '******', 'x-forwarded-for': '203.0.113.1' } : {}),
   json: async () => body,
 }, { error: () => undefined })
+const approveAndPublishRemediation = async (repoUrl: string) => {
+  const prepared = await invoke('remediatePullRequest', { repoUrl }, true)
+  const review = prepared.jsonBody as {
+    approvedPlan: unknown
+    planId: string
+    approvedPatchHash: string
+    approvalToken: string
+  }
+  return invoke('remediatePullRequest', {
+    repoUrl,
+    planId: review.planId,
+    approvedPlan: review.approvedPlan,
+    approvedPatchHash: review.approvedPatchHash,
+    approvalToken: review.approvalToken,
+  }, true)
+}
 
 for (const [endpoint, body] of [
   ['audioPreview', { auditSummary: 'Summary' }],
@@ -261,9 +283,33 @@ test('GitHub issue creation applies a durable rate limit before writes', async (
 
 test('remediation always writes a verified fork using its returned name, never upstream permissions', async () => {
   authenticated = true
-  const result = await invoke('remediatePullRequest', { repoUrl: 'https://github.com/upstream/site', approvedPatchHash }, true)
+  const prepared = await invoke('remediatePullRequest', { repoUrl: 'https://github.com/upstream/site' }, true)
+  assert.equal(prepared.status, 200)
+  const review = prepared.jsonBody as {
+    stage: string
+    approvedPlan: unknown
+    planId: string
+    approvedPatchHash: string
+    approvalToken: string
+  }
+  assert.equal(review.stage, 'review')
+  assert.equal(review.planId, review.approvedPatchHash)
+  assert.ok(review.approvedPatchHash)
+  assert.ok(review.approvalToken)
+  assert.equal(forkCalls, 0)
+  assert.equal(writes.length, 0)
+  const result = await invoke('remediatePullRequest', {
+    repoUrl: 'https://github.com/upstream/site',
+    planId: review.planId,
+    approvedPlan: review.approvedPlan,
+    approvedPatchHash: review.approvedPatchHash,
+    approvalToken: review.approvalToken,
+  }, true)
   assert.equal(result.status, 201)
-  assert.deepEqual(quotas, [{ key: 'remediation:user:test', limit: 5 }])
+  assert.deepEqual(quotas, [
+    { key: 'remediation:prepare:user:test', limit: 5 },
+    { key: 'remediation:publish:user:test', limit: 5 },
+  ])
   assert.equal(forkCalls, 1)
   assert.deepEqual(writes.filter(({ method }) => method !== 'pull').map(({ params }) => [params.owner, params.repo]),
     Array.from({ length: 6 }, () => ['bot', 'renamed-site']))
@@ -277,13 +323,84 @@ test('remediation always writes a verified fork using its returned name, never u
 for (const approval of [undefined, 'incorrect-hash']) {
   test(`remediation rejects ${approval === undefined ? 'missing' : 'mismatched'} patch approval before publishing content`, async () => {
     authenticated = true
+    const prepared = await invoke('remediatePullRequest', { repoUrl: 'https://github.com/upstream/site' }, true)
+    const review = prepared.jsonBody as {
+      approvedPlan: unknown
+      planId: string
+      approvedPatchHash: string
+      approvalToken: string
+    }
     const result = await invoke('remediatePullRequest', {
-      repoUrl: 'https://github.com/upstream/site', approvedPatchHash: approval,
+      repoUrl: 'https://github.com/upstream/site',
+      planId: review.planId,
+      approvedPlan: review.approvedPlan,
+      approvedPatchHash: approval,
+      approvalToken: review.approvalToken,
     }, true)
     assert.equal(result.status, 412)
-    assert.equal(writes.filter(({ method }) => method !== 'createRef').length, 0)
+    assert.equal(forkCalls, 0)
+    assert.equal(writes.length, 0)
   })
 }
+
+test('remediation rejects altered plans and unapproved repository targets before GitHub writes', async () => {
+  authenticated = true
+  const prepared = await invoke('remediatePullRequest', { repoUrl: 'https://github.com/upstream/site' }, true)
+  const review = prepared.jsonBody as {
+    approvedPlan: { plan: { patches: Array<{ content: string }> } }
+    planId: string
+    approvedPatchHash: string
+    approvalToken: string
+  }
+  review.approvedPlan.plan.patches[0].content += '\n// altered'
+  const altered = await invoke('remediatePullRequest', {
+    repoUrl: 'https://github.com/upstream/site',
+    planId: review.planId,
+    approvedPlan: review.approvedPlan,
+    approvedPatchHash: review.approvedPatchHash,
+    approvalToken: review.approvalToken,
+  }, true)
+  assert.equal(altered.status, 412)
+  assert.equal(forkCalls, 0)
+  assert.equal(writes.length, 0)
+
+  const clientsBeforeDeniedRequest = clientOptions.length
+  remediationRepositoryAllowed = false
+  const denied = await invoke('remediatePullRequest', { repoUrl: 'https://github.com/upstream/site' }, true)
+  assert.equal(denied.status, 403)
+  assert.equal(clientOptions.length, clientsBeforeDeniedRequest)
+  assert.equal(forkCalls, 0)
+  assert.equal(writes.length, 0)
+})
+
+test('remediation rejects a stale reviewed plan and disabled model opt-in without publishing', async () => {
+  authenticated = true
+  const prepared = await invoke('remediatePullRequest', { repoUrl: 'https://github.com/upstream/site' }, true)
+  const review = prepared.jsonBody as {
+    approvedPlan: unknown
+    planId: string
+    approvedPatchHash: string
+    approvalToken: string
+  }
+  sourceSha = 'b'.repeat(40)
+  const stale = await invoke('remediatePullRequest', {
+    repoUrl: 'https://github.com/upstream/site',
+    planId: review.planId,
+    approvedPlan: review.approvedPlan,
+    approvedPatchHash: review.approvedPatchHash,
+    approvalToken: review.approvalToken,
+  }, true)
+  assert.equal(stale.status, 412)
+  assert.equal(forkCalls, 0)
+  assert.equal(writes.length, 0)
+
+  process.env.META_ALLOW_AUTONOMOUS_REMEDIATION = 'false'
+  const disabled = await invoke('remediatePullRequest', { repoUrl: 'https://github.com/upstream/site' }, true)
+  assert.equal(disabled.status, 503)
+  assert.equal(modelCalls, 1)
+  assert.equal(forkCalls, 0)
+  assert.equal(writes.length, 0)
+})
 
 test('bot-owned remediation targets fail closed before source or model access', async () => {
   authenticated = true
@@ -305,7 +422,7 @@ for (const failures of [2, 5]) {
       queueMicrotask(callback)
       return {} as NodeJS.Timeout
     })
-    const result = await invoke('remediatePullRequest', { repoUrl: 'https://github.com/upstream/site', approvedPatchHash }, true)
+    const result = await approveAndPublishRemediation('https://github.com/upstream/site')
     assert.equal(result.status, failures < 5 ? 201 : 500)
     assert.equal(forkMetadataAttempts, Math.min(failures + 1, 5))
     assert.deepEqual(waits, failures < 5 ? [500, 1000] : [500, 1000, 1500, 2000])
@@ -323,7 +440,7 @@ for (const scenario of ['unrelated', 'private', 'wrong-owner', 'missing-parent',
     if (scenario === 'wrong-owner') forkOwner = 'other'
     if (scenario === 'missing-parent') forkParent = undefined
     if (scenario === 'not-a-fork') forkIsFork = false
-    const result = await invoke('remediatePullRequest', { repoUrl: 'https://github.com/upstream/site' }, true)
+    const result = await approveAndPublishRemediation('https://github.com/upstream/site')
     assert.equal(result.status, 403)
     assert.equal(writes.length, 0)
   })

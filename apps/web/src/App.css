@@ -48,6 +48,10 @@ input::placeholder { color: #637a70; opacity: 1; }
 .optional-repo input[type='file'] { padding: 0.55rem; }
 .error-message { color: #a12600; font-weight: 700; }
 .preview-box { max-width: 760px; margin: 0 auto; padding: clamp(1.2rem, 3vw, 2rem); background: var(--mint); border: 1px solid var(--border); border-radius: 14px; }
+.remediation-review { margin-top: 1.2rem; padding: 1rem; border: 1px solid var(--border); border-radius: 10px; background: var(--paper); }
+.remediation-review h4, .remediation-review h5 { margin: 0.6rem 0; }
+.remediation-review details { margin-top: 0.8rem; }
+.remediation-review summary { cursor: pointer; font-weight: 700; }
 .preview-label { color: var(--green-dark); font-size: 0.75rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; }
 .preview-box h3 { margin: 0.5rem 0; font-family: Manrope, sans-serif; font-size: 1.4rem; }
 .preview-box > p { color: var(--muted); line-height: 1.6; }
@@ -122,6 +126,7 @@ pre { max-width: 100%; overflow-x: auto; padding: 0.85rem; background: #12231f; 
 [data-theme='high-contrast'] .category-card,
 [data-theme='high-contrast'] .rule-card,
 [data-theme='high-contrast'] .preview-box { color: #000; background: #fff; border: 2px solid #000; }
+[data-theme='high-contrast'] .remediation-review { color: #000; background: #fff; border: 2px solid #000; }
 [data-theme='high-contrast'] .severity { color: #000; background: #fff; border: 1px solid #000; }
 [data-theme='high-contrast'] .mode-switch { background: #fff; border: 2px solid #000; }
 [data-theme='high-contrast'] .mode-switch button[aria-selected='true'] { color: #000; outline: 2px solid #000; }
