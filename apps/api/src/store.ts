@@ -165,6 +165,23 @@ export const getScanScore = async (id: string): Promise<number | undefined> => {
     : undefined
 }
 
+export const getStoredScan = async (id: string): Promise<{
+  scanType: 'WEB_URL' | 'SOURCE_CODE'
+  target: string
+  report: unknown
+} | undefined> => {
+  const container = await getContainer('scans')
+  const { resources } = await container.items.query<{
+    scanType: 'WEB_URL' | 'SOURCE_CODE'
+    target: string
+    report: unknown
+  }>({
+    query: 'SELECT c.scanType, c.target, c.report FROM c WHERE c.id = @id',
+    parameters: [{ name: '@id', value: id }],
+  }, { maxItemCount: 1 }).fetchNext()
+  return resources[0]
+}
+
 export const saveRemediation = async (record: RemediationRecord) => {
   const container = await getContainer('remediations')
   await container.items.upsert({ ...record, updatedAt: new Date().toISOString() })

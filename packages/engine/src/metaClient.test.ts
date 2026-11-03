@@ -150,7 +150,13 @@ test('patched source files with syntax errors are rejected', async () => {
   assert.ok(validateSourceSyntax('src/broken.css', '.card { color: red;').length > 0)
 })
 
-test('duplicate patch paths cannot replace another planned file', async () => {
+test('duplicate patch paths cannot replace another planned file', async (t) => {
+  const previous = process.env.META_ALLOW_AUTONOMOUS_REMEDIATION
+  process.env.META_ALLOW_AUTONOMOUS_REMEDIATION = 'true'
+  t.after(() => {
+    if (previous === undefined) delete process.env.META_ALLOW_AUTONOMOUS_REMEDIATION
+    else process.env.META_ALLOW_AUTONOMOUS_REMEDIATION = previous
+  })
   process.env.META_ALLOW_AUTONOMOUS_REMEDIATION = 'true'
   const findings = ['first', 'second'].map((id) => ({
     id, title: 'Missing label', description: 'Add a label.', filePath: `${id}.tsx`,

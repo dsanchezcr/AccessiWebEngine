@@ -129,6 +129,7 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     ENTRA_B2C_SIGNUP_SIGNIN_POLICY: entraB2cPolicyName
     ENTRA_B2C_ISSUER: entraB2cIssuer
     FEATURE_ENABLE_AUTO_PR_PREVIEW: string(featureEnableAutoPrPreview)
+    META_ALLOW_AUTONOMOUS_REMEDIATION: string(featureEnableAutoPrPreview)
     ...(enablePreviewInviteCode ? {
       META_PREVIEW_INVITE_CODE: '@Microsoft.KeyVault(SecretUri=${keyVaultSecretUri}/meta-preview-invite-code/)'
     } : {})

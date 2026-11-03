@@ -9,6 +9,7 @@ const handlers = new Map<string, (request: any, context: any) => Promise<any>>()
 let quotaAllowed = true
 let authenticated = false
 let privateRepository = false
+let issueRepositoryAllowed = true
 let forkOwner = 'bot'
 let forkPrivate = false
 let forkParent: string | undefined = 'upstream/site'
@@ -22,13 +23,17 @@ let responseStatus = 200
 let responseContentType = 'text/html'
 const quotas: Array<{ key: string; limit: number }> = []
 const writes: Array<{ method: string; params: any }> = []
+const issueWrites: Array<{ method: string; params: any }> = []
 const clientOptions: any[] = []
 const user = {
   id: 'user_test', entraOid: 'test',
   featureFlags: { autoRemediationPrPreview: true },
 }
 const audit = {
-  findings: [{ id: 'finding', wcagCriterion: '1.1.1', severity: 'high', title: 'Image alt', filePath: 'index.html' }],
+  findings: [{
+    id: 'finding', wcagCriterion: '1.1.1', severity: 'serious', title: 'Image alt',
+    description: 'An image needs alt text.', filePath: 'index.html',
+  }],
   summary: 'An image needs alt text.', score: 90,
 }
 const approvedPatchHash = createHash('sha256').update(JSON.stringify([
@@ -65,6 +70,13 @@ class FakeOctokit {
     },
     getCollaboratorPermissionLevel: async () => {
       throw new Error('Remediation must not consult upstream write privileges.')
+    },
+  }
+  issues = {
+    createLabel: async (params: any) => { issueWrites.push({ method: 'label', params }) },
+    create: async (params: any) => {
+      issueWrites.push({ method: 'issue', params })
+      return { data: { html_url: 'https://github.com/upstream/site/issues/1' } }
     },
   }
   git = {
@@ -121,7 +133,7 @@ mock.module(compiled('security'), { namedExports: {
     return { sub: 'test' }
   },
   consumeIssueWriteQuota: () => true,
-  isIssueRepositoryAllowed: () => false,
+  isIssueRepositoryAllowed: () => issueRepositoryAllowed,
   resolvePublicAddress: async () => '93.184.216.34',
   validatePublicUrl: async (value: string) => new URL(value),
 } })
@@ -132,6 +144,16 @@ mock.module(compiled('store'), { namedExports: {
   },
   getOrCreateUser: async () => user,
   saveScan: async () => 'scan-id',
+  getStoredScan: async (id: string) => id === 'scan-id' ? {
+    scanType: 'SOURCE_CODE',
+    target: 'https://github.com/upstream/site',
+    report: {
+      ...audit,
+      summary: '@everyone click https://phish.example',
+      repoUrl: 'https://github.com/upstream/site',
+      categoryScores: { perceivable: 90, operable: 90, understandable: 90, robust: 90 },
+    },
+  } : undefined,
   saveRemediation: async () => undefined,
   deleteUserData: async () => undefined,
   enablePreviewForUser: async () => user,
@@ -143,6 +165,7 @@ beforeEach(() => {
   quotaAllowed = true
   authenticated = false
   privateRepository = false
+  issueRepositoryAllowed = true
   forkOwner = 'bot'
   forkPrivate = false
   forkParent = 'upstream/site'
@@ -156,6 +179,7 @@ beforeEach(() => {
   responseContentType = 'text/html'
   quotas.length = 0
   writes.length = 0
+  issueWrites.length = 0
   clientOptions.length = 0
   process.env.GITHUB_BOT_TOKEN = 'test-bot-token'
   process.env.FEATURE_ENABLE_AUTO_PR_PREVIEW = 'true'
@@ -203,6 +227,36 @@ test('public repository scans use the configured bot token', async () => {
   assert.equal(result.status, 200)
   assert.deepEqual(clientOptions, [{ auth: 'test-bot-token' }])
   assert.equal(modelCalls, 1)
+})
+
+test('GitHub issues are rendered from a stored scan and use the durable repository quota', async () => {
+  const result = await invoke('createIssue', {
+    scanId: 'scan-id',
+    title: '@everyone click https://phish.example',
+    body: 'untrusted caller text',
+  })
+  assert.equal(result.status, 200)
+  assert.deepEqual(quotas, [{ key: 'issue:upstream/site', limit: 5 }])
+  const created = issueWrites.find(({ method }) => method === 'issue')!.params
+  assert.equal(created.title, 'Accessibility audit: 1 finding')
+  assert.ok(created.body.includes('@\u200b'))
+  assert.ok(created.body.includes('https:\u200b//'))
+  assert.doesNotMatch(created.body, /@everyone|https:\/\/phish\.example|untrusted caller text/)
+})
+
+test('GitHub issue creation rejects a repository scan outside the allowlist', async () => {
+  issueRepositoryAllowed = false
+  const result = await invoke('createIssue', { scanId: 'scan-id' })
+  assert.equal(result.status, 403)
+  assert.equal(issueWrites.length, 0)
+  assert.equal(quotas.length, 0)
+})
+
+test('GitHub issue creation applies a durable rate limit before writes', async () => {
+  quotaAllowed = false
+  const result = await invoke('createIssue', { scanId: 'scan-id' })
+  assert.equal(result.status, 429)
+  assert.equal(issueWrites.length, 0)
 })
 
 test('remediation always writes a verified fork using its returned name, never upstream permissions', async () => {

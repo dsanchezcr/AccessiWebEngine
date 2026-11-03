@@ -80,7 +80,7 @@ The report Markdown includes an embeddable score badge backed by the public SVG 
 | `COSMOS_DB_ENDPOINT` | API | Cosmos endpoint; deployed apps use their system-assigned identity |
 | `COSMOS_DB_CONNECTION_STRING` | API local development only | Local Cosmos connection-string fallback |
 | `ENTRA_B2C_TENANT_NAME`, `ENTRA_B2C_SIGNUP_SIGNIN_POLICY`, `ENTRA_B2C_CLIENT_ID`, `ENTRA_B2C_ISSUER` | API | JWT validation and B2C sign-in configuration |
-| `FEATURE_ENABLE_AUTO_PR_PREVIEW`, `META_PREVIEW_INVITE_CODE` | API | Global preview gate and optional invite; do not expose the invite to the browser |
+| `FEATURE_ENABLE_AUTO_PR_PREVIEW`, `META_ALLOW_AUTONOMOUS_REMEDIATION`, `META_PREVIEW_INVITE_CODE` | API | The global preview gate also controls the autonomous-remediation safety opt-in; local runs default to disabled. The optional invite must not be exposed to the browser |
 | `VITE_API_BASE_URL` | Frontend build | API base URL; deployment workflows set this from Bicep output |
 | `VITE_ENTRA_B2C_TENANT_NAME`, `VITE_ENTRA_B2C_CLIENT_ID`, `VITE_ENTRA_B2C_SIGNUP_SIGNIN_POLICY`, `VITE_ENTRA_B2C_PROFILE_EDIT_POLICY`, `VITE_ENTRA_B2C_REDIRECT_URI`, `VITE_ENTRA_B2C_API_SCOPE` | Frontend build | Public identity-provider configuration only |
 

@@ -10,7 +10,6 @@ import { renderScoreBadgeSvg } from '../../../packages/shared/src/scoreBadge.js'
 import { MetaAiClient } from '../../../packages/engine/src/metaClient.js'
 import { collectDomBaseline } from './domBaseline.js'
 import {
-  consumeIssueWriteQuota,
   isIssueRepositoryAllowed,
   resolvePublicAddress,
   validatePublicUrl,
@@ -21,12 +20,14 @@ import {
   deleteUserData,
   enablePreviewForUser,
   getScanScore,
+  getStoredScan,
   getOrCreateUser,
   saveRemediation,
   saveScan,
   type RemediationRecord,
 } from './store.js'
 import { canActivatePreview, getPreviewInviteCode } from './previewAccess.js'
+import { SourceCodeAuditReportSchema } from '../../../packages/shared/src/schemas.js'
 
 const json = (body: unknown, status = 200): HttpResponseInit => ({
   status,
@@ -60,6 +61,37 @@ const ensureString = (value: unknown, field: string): string => {
   }
   return value.trim()
 }
+
+const escapeIssueText = (value: string): string =>
+  value
+    .replace(/https?:\/\//gi, (scheme) => `${scheme.slice(0, -2)}\u200b//`)
+    .replace(/@/g, '@\u200b')
+    .replace(/[\\`*_{}[\]()#+.!|>~-]/g, '\\$&')
+    .replace(/[<>]/g, (character) => character === '<' ? '&lt;' : '&gt;')
+    .replace(/\r?\n/g, ' ')
+
+const renderIssueBody = (
+  scanId: string,
+  repoUrl: string,
+  report: ReturnType<typeof SourceCodeAuditReportSchema.parse>,
+): string => [
+  '## AccessiWeb accessibility audit',
+  '',
+  `Repository: ${escapeIssueText(repoUrl)}`,
+  `Scan ID: \`${scanId}\``,
+  '',
+  '### Summary',
+  '',
+  escapeIssueText(report.summary),
+  '',
+  '### Findings',
+  '',
+  ...report.findings.map((finding) =>
+    `- **${escapeIssueText(finding.wcagCriterion)} · ${escapeIssueText(finding.severity)}** — ${escapeIssueText(finding.title)}${finding.filePath ? ` · \`${escapeIssueText(finding.filePath)}\`` : ''}${finding.startLine ? `:${finding.startLine}` : ''}${finding.description ? ` — ${escapeIssueText(finding.description)}` : ''}`,
+  ),
+  '',
+  'Review findings and verify proposed fixes manually before merging.',
+].join('\n')
 
 const requestUser = async (request: HttpRequest) => {
   let claims: Awaited<ReturnType<typeof verifyBearerToken>>
@@ -356,22 +388,29 @@ app.http('createIssue', {
   route: 'v1/github/issues',
   handler: async (request, context) => {
     try {
-      const body = await bodyOf<{ repoUrl?: unknown; title?: unknown; body?: unknown }>(request)
-      const repo = parseRepoUrl(ensureString(body.repoUrl, 'repoUrl'))
+      const body = await bodyOf<{ scanId?: unknown }>(request)
+      const scanId = ensureString(body.scanId, 'scanId')
+      const scan = await getStoredScan(scanId)
+      if (!scan || scan.scanType !== 'SOURCE_CODE') {
+        throw new RequestError(404, 'A saved repository scan was not found.')
+      }
+      const repo = parseRepoUrl(scan.target)
       if (!isIssueRepositoryAllowed(repo.owner, repo.repo)) {
         throw new RequestError(403, 'The bot is not enabled for this repository. Open a manual issue instead.')
       }
-      const title = ensureString(body.title, 'title')
-      const issueBody = ensureString(body.body, 'body')
-      if (title.length > 200 || issueBody.length > 60_000) {
-        throw new RequestError(413, 'Issue title or report exceeds the GitHub size limit.')
+      const report = SourceCodeAuditReportSchema.safeParse(scan.report)
+      if (!report.success) throw new RequestError(500, 'The saved repository report is unavailable.')
+      const title = `Accessibility audit: ${report.data.findings.length} finding${report.data.findings.length === 1 ? '' : 's'}`
+      const issueBody = renderIssueBody(scanId, repo.url, report.data)
+      if (issueBody.length > 60_000) {
+        throw new RequestError(413, 'The saved report exceeds the GitHub issue size limit.')
       }
       const token = process.env.GITHUB_BOT_TOKEN
       if (!token) throw new RequestError(503, 'GitHub issue creation is not configured.')
       const octokit = new Octokit({ auth: token })
       const { data: repository } = await octokit.repos.get({ owner: repo.owner, repo: repo.repo })
       if (repository.private) throw new RequestError(400, 'Issues can only be created on public repositories.')
-      if (!consumeIssueWriteQuota(repo.owner, repo.repo)) {
+      if (!await consumeRateLimit(`issue:${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}`, 5)) {
         throw new RequestError(429, 'Issue creation is temporarily rate-limited for this repository.')
       }
       for (const label of ['accessibility', 'wcag-2.2', 'accessiweb-audit']) {

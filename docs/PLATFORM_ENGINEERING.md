@@ -60,6 +60,7 @@ Set the following Actions variables at repository scope for PR deployments and s
 | `ENTRA_B2C_ISSUER` | Exact JWT issuer expected by API verification |
 | `VITE_ENTRA_B2C_API_SCOPE` | API scope requested by the frontend |
 | `FEATURE_ENABLE_AUTO_PR_PREVIEW` | `true` only for environments where preview remediation is deliberately enabled |
+| `META_ALLOW_AUTONOMOUS_REMEDIATION` | Set with the preview feature gate; false by default in local settings |
 
 The workflows deploy to Azure only for same-repository PRs; fork PRs still run validation but do not receive Azure credentials or secrets. Protect `main` and restrict who can edit Actions secrets and environment variables. Configure GitHub environment protection rules, especially required reviewers for `prod` (and optionally `qa`).
 
