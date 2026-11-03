@@ -640,6 +640,21 @@ app.http('remediatePullRequest', {
         if (lastError) throw lastError
       }
 
+      const canonicalPatchPayload = patches
+        .map((patch) => ({ filePath: patch.filePath, content: patch.content }))
+        .sort((a, b) => a.filePath.localeCompare(b.filePath))
+      const computedPatchHash = createHash('sha256').update(JSON.stringify(canonicalPatchPayload), 'utf8').digest('hex')
+      const approvedPatchHash =
+        typeof (body as { approvedPatchHash?: unknown }).approvedPatchHash === 'string'
+          ? (body as { approvedPatchHash: string }).approvedPatchHash.trim().toLowerCase()
+          : ''
+      if (!approvedPatchHash || approvedPatchHash !== computedPatchHash) {
+        throw new RequestError(
+          412,
+          'Patch approval required: approvedPatchHash must match the exact remediation diff being published.',
+        )
+      }
+
       const entries = await Promise.all(patches.map(async (patch) => {
         const blob = await octokit.git.createBlob({
           owner: commitOwner,
