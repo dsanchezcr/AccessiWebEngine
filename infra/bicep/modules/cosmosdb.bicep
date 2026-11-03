@@ -46,7 +46,7 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
         ]
     enableAutomaticFailover: false
     enableMultipleWriteLocations: false
-    disableLocalAuth: false
+    disableLocalAuth: true
     publicNetworkAccess: 'Enabled'
   }
 }
