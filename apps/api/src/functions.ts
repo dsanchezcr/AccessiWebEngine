@@ -77,12 +77,18 @@ const optionalScanOwner = async (request: HttpRequest): Promise<string | undefin
   return (await requestUser(request)).entraOid
 }
 
+const clientAddress = (request: HttpRequest): string => {
+  const forwarded = request.headers.get('x-forwarded-for')?.split(',').at(-1)?.trim() || 'unknown'
+  // Azure front ends append the client as "ip:port" or "[ipv6]:port"; drop the ephemeral port.
+  return forwarded.match(/^\[([^\]]+)\](?::\d+)?$/)?.[1] ??
+    forwarded.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/)?.[1] ??
+    forwarded
+}
+
 const consumeScanQuota = async (request: HttpRequest, owner?: string): Promise<void> => {
   const limitKey = owner
     ? `user:${owner}`
-    : `ip:${createHash('sha256')
-      .update(request.headers.get('x-forwarded-for')?.split(',').at(-1)?.trim() || 'unknown')
-      .digest('hex')}`
+    : `ip:${createHash('sha256').update(clientAddress(request)).digest('hex')}`
   if (!await consumeRateLimit(limitKey, owner ? 30 : 10)) {
     throw new RequestError(429, 'The scan limit for this account or address has been reached.')
   }
