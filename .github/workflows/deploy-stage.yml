@@ -12,7 +12,7 @@ on:
         required: true
       META_API_KEY:
         required: true
-      GITHUB_BOT_TOKEN:
+      BOT_TOKEN:
         required: true
       META_PREVIEW_INVITE_CODE:
         required: false
@@ -27,7 +27,7 @@ jobs:
     env:
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
       META_API_KEY: ${{ secrets.META_API_KEY }}
-      GITHUB_BOT_TOKEN: ${{ secrets.GITHUB_BOT_TOKEN }}
+      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
       META_PREVIEW_INVITE_CODE: ${{ secrets.META_PREVIEW_INVITE_CODE }}
       AZURE_DEPLOYMENT_PRINCIPAL_ID: ${{ vars.AZURE_DEPLOYMENT_PRINCIPAL_ID }}
       META_API_BASE_URL: ${{ vars.META_API_BASE_URL }}
@@ -62,7 +62,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for name in AZURE_CREDENTIALS META_API_KEY GITHUB_BOT_TOKEN AZURE_DEPLOYMENT_PRINCIPAL_ID META_API_BASE_URL; do
+          for name in AZURE_CREDENTIALS META_API_KEY BOT_TOKEN AZURE_DEPLOYMENT_PRINCIPAL_ID META_API_BASE_URL; do
             if [[ -z "${!name:-}" ]]; then
               echo "Required environment secret or variable is missing: $name" >&2
               exit 1
@@ -86,7 +86,7 @@ jobs:
               environment="$TARGET_ENVIRONMENT" \
               deploymentPrincipalId="$AZURE_DEPLOYMENT_PRINCIPAL_ID" \
               metaApiKey="$META_API_KEY" \
-              githubBotToken="$GITHUB_BOT_TOKEN" \
+              githubBotToken="$BOT_TOKEN" \
               metaPreviewInviteCode="${META_PREVIEW_INVITE_CODE:-}" \
               metaApiBaseUrl="$META_API_BASE_URL" \
               metaAnalysisProvider="${META_ANALYSIS_PROVIDER:-meta}" \

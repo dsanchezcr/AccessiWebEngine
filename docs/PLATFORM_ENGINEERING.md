@@ -35,8 +35,10 @@ Configure these repository secrets (or environment secrets for permanent tiers):
 | --- | --- |
 | `AZURE_CREDENTIALS` | Service-principal JSON consumed by `azure/login@v2` |
 | `META_API_KEY` | Server-side Meta API authentication; stored in Key Vault by deployment |
-| `GITHUB_BOT_TOKEN` | Server-side GitHub issue/remediation integration token; stored in Key Vault |
+| `BOT_TOKEN` | Server-side GitHub issue/remediation integration token; stored in Key Vault |
 | `META_PREVIEW_INVITE_CODE` | Optional shared preview invite; stored in Key Vault when set |
+
+GitHub Actions secret names cannot start with `GITHUB_`. Create `BOT_TOKEN` at repository scope for PR deployments and in each permanent environment as needed. Deployment maps it to the API's existing `GITHUB_BOT_TOKEN` runtime setting through Key Vault.
 
 Set the following Actions variables at repository scope for PR deployments and separately in each `staging`, `qa`, and `prod` environment:
 
@@ -84,7 +86,7 @@ az deployment sub create \
   --parameters environment=staging \
     deploymentPrincipalId="<SERVICE_PRINCIPAL_OBJECT_ID>" \
     metaApiKey="<META_API_KEY>" \
-    githubBotToken="<GITHUB_BOT_TOKEN>" \
+    githubBotToken="<BOT_TOKEN>" \
     metaPreviewInviteCode="<OPTIONAL_PREVIEW_CODE_OR_EMPTY>" \
     metaApiBaseUrl="<META_API_BASE_URL>"
 ```
