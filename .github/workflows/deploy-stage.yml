@@ -1,0 +1,175 @@
+name: Deploy one AccessiWeb environment
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Target GitHub/Azure environment
+        required: true
+        type: string
+    secrets:
+      AZURE_CREDENTIALS:
+        required: true
+      META_API_KEY:
+        required: true
+      BOT_TOKEN:
+        required: true
+      META_PREVIEW_INVITE_CODE:
+        required: false
+      META_MUSE_SPARK_OPEN_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.swa.outputs.static_web_app_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build --workspace apps/api
+      - name: Package and smoke-test standalone API
+        run: node .github/scripts/package-api.mjs
+      - name: Validate deployment configuration
+        shell: bash
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          META_API_KEY: ${{ secrets.META_API_KEY }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          AZURE_DEPLOYMENT_PRINCIPAL_ID: ${{ vars.AZURE_DEPLOYMENT_PRINCIPAL_ID }}
+          META_API_BASE_URL: ${{ vars.META_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          for name in AZURE_CREDENTIALS META_API_KEY BOT_TOKEN AZURE_DEPLOYMENT_PRINCIPAL_ID META_API_BASE_URL; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Required environment secret or variable is missing: $name" >&2
+              exit 1
+            fi
+          done
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Provision environment
+        id: infra
+        shell: bash
+        env:
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          META_API_KEY: ${{ secrets.META_API_KEY }}
+          META_MUSE_SPARK_OPEN_API_KEY: ${{ secrets.META_MUSE_SPARK_OPEN_API_KEY }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          META_PREVIEW_INVITE_CODE: ${{ secrets.META_PREVIEW_INVITE_CODE }}
+          AZURE_DEPLOYMENT_PRINCIPAL_ID: ${{ vars.AZURE_DEPLOYMENT_PRINCIPAL_ID }}
+          META_API_BASE_URL: ${{ vars.META_API_BASE_URL }}
+          META_ANALYSIS_PROVIDER: ${{ vars.META_ANALYSIS_PROVIDER }}
+          META_MUSE_SPARK_OPEN_URL: ${{ vars.META_MUSE_SPARK_OPEN_URL }}
+          META_MUSE_SPARK_OPEN_MODEL: ${{ vars.META_MUSE_SPARK_OPEN_MODEL }}
+          META_MUSE_CODE_MODEL: ${{ vars.META_MUSE_CODE_MODEL }}
+          META_SAM_MODEL: ${{ vars.META_SAM_MODEL }}
+          META_MUSE_WONDER_MODEL: ${{ vars.META_MUSE_WONDER_MODEL }}
+          META_MUSE_IMAGE_MODEL: ${{ vars.META_MUSE_IMAGE_MODEL }}
+          GITHUB_ISSUE_ALLOWED_REPOSITORIES: ${{ vars.ISSUE_ALLOWED_REPOSITORIES }}
+          ENTRA_B2C_TENANT_NAME: ${{ vars.ENTRA_B2C_TENANT_NAME }}
+          ENTRA_B2C_CLIENT_ID: ${{ vars.ENTRA_B2C_CLIENT_ID }}
+          ENTRA_B2C_POLICY_NAME: ${{ vars.ENTRA_B2C_POLICY_NAME }}
+          ENTRA_B2C_ISSUER: ${{ vars.ENTRA_B2C_ISSUER }}
+          FEATURE_ENABLE_AUTO_PR_PREVIEW: ${{ vars.FEATURE_ENABLE_AUTO_PR_PREVIEW }}
+        run: |
+          set -euo pipefail
+          outputs="$(az deployment sub create \
+            --name "deploy-accessiweb-${TARGET_ENVIRONMENT}" \
+            --location eastus2 \
+            --template-file infra/bicep/main.bicep \
+            --parameters \
+              environment="$TARGET_ENVIRONMENT" \
+              deploymentPrincipalId="$AZURE_DEPLOYMENT_PRINCIPAL_ID" \
+              metaApiKey="$META_API_KEY" \
+              metaMuseSparkOpenApiKey="${META_MUSE_SPARK_OPEN_API_KEY:-}" \
+              githubBotToken="$BOT_TOKEN" \
+              metaPreviewInviteCode="${META_PREVIEW_INVITE_CODE:-}" \
+              metaApiBaseUrl="$META_API_BASE_URL" \
+              metaAnalysisProvider="${META_ANALYSIS_PROVIDER:-meta}" \
+              metaMuseSparkOpenUrl="${META_MUSE_SPARK_OPEN_URL:-}" \
+              metaMuseSparkOpenModel="${META_MUSE_SPARK_OPEN_MODEL:-}" \
+              metaMuseCodeModel="${META_MUSE_CODE_MODEL:-muse-code}" \
+              metaSamModel="${META_SAM_MODEL:-sam-3.1}" \
+              metaMuseWonderModel="${META_MUSE_WONDER_MODEL:-muse-wonder}" \
+              metaMuseImageModel="${META_MUSE_IMAGE_MODEL:-muse-image}" \
+              githubIssueAllowedRepositories="${GITHUB_ISSUE_ALLOWED_REPOSITORIES:-}" \
+              entraB2cTenantName="${ENTRA_B2C_TENANT_NAME:-}" \
+              entraB2cClientId="${ENTRA_B2C_CLIENT_ID:-}" \
+              entraB2cPolicyName="${ENTRA_B2C_POLICY_NAME:-}" \
+              entraB2cIssuer="${ENTRA_B2C_ISSUER:-}" \
+              featureEnableAutoPrPreview="${FEATURE_ENABLE_AUTO_PR_PREVIEW:-false}" \
+            --query properties.outputs --output json)"
+          echo "resource_group=$(jq -r '.resourceGroupName.value' <<< "$outputs")" >> "$GITHUB_OUTPUT"
+          echo "api_name=$(jq -r '.functionAppName.value' <<< "$outputs")" >> "$GITHUB_OUTPUT"
+          echo "api_url=$(jq -r '.functionAppUrl.value' <<< "$outputs")" >> "$GITHUB_OUTPUT"
+          echo "swa_name=$(jq -r '.staticWebAppName.value' <<< "$outputs")" >> "$GITHUB_OUTPUT"
+          echo "site_url=$(jq -r '.staticWebAppUrl.value' <<< "$outputs")" >> "$GITHUB_OUTPUT"
+      - uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ steps.infra.outputs.api_name }}
+          package: .artifacts/api
+          scm-do-build-during-deployment: false
+          enable-oryx-build: false
+      - name: Build and deploy frontend
+        env:
+          VITE_API_BASE_URL: ${{ steps.infra.outputs.api_url }}/api
+          VITE_ENTRA_B2C_TENANT_NAME: ${{ vars.ENTRA_B2C_TENANT_NAME }}
+          VITE_ENTRA_B2C_CLIENT_ID: ${{ vars.ENTRA_B2C_CLIENT_ID }}
+          VITE_ENTRA_B2C_SIGNUP_SIGNIN_POLICY: ${{ vars.ENTRA_B2C_POLICY_NAME }}
+          VITE_ENTRA_B2C_PROFILE_EDIT_POLICY: ${{ vars.ENTRA_B2C_PROFILE_EDIT_POLICY }}
+          VITE_ENTRA_B2C_API_SCOPE: ${{ vars.VITE_ENTRA_B2C_API_SCOPE }}
+        run: |
+          set -euo pipefail
+          npm run build --workspace apps/web
+          cp apps/web/staticwebapp.config.json apps/web/dist/staticwebapp.config.json
+      - name: Get Static Web App deployment token
+        id: swa-token
+        env:
+          RESOURCE_GROUP: ${{ steps.infra.outputs.resource_group }}
+          STATIC_WEB_APP_NAME: ${{ steps.infra.outputs.swa_name }}
+        run: |
+          token="$(az staticwebapp secrets list --name "$STATIC_WEB_APP_NAME" --resource-group "$RESOURCE_GROUP" --query properties.apiKey --output tsv)"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - name: Deploy Static Web App
+        id: swa
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          action: upload
+          azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
+          app_location: apps/web/dist
+          api_location: ''
+          output_location: ''
+          skip_app_build: true
+      - name: Configure and verify frontend CORS
+        env:
+          RESOURCE_GROUP: ${{ steps.infra.outputs.resource_group }}
+          FUNCTION_APP_NAME: ${{ steps.infra.outputs.api_name }}
+          PRIMARY_SITE_URL: ${{ steps.infra.outputs.site_url }}
+          SITE_URL: ${{ steps.swa.outputs.static_web_app_url }}
+          API_URL: ${{ steps.infra.outputs.api_url }}
+        run: bash .github/scripts/configure-web-origin.sh
+      - name: Verify health endpoint
+        env:
+          HEALTH_URL: ${{ steps.infra.outputs.api_url }}/api/v1/health
+        run: |
+          for attempt in $(seq 1 24); do
+            if curl --fail --silent --show-error "$HEALTH_URL"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Function API health check failed." >&2
+          exit 1

@@ -1,0 +1,24 @@
+{
+  "name": "@accessiweb/api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/apps/api/src/functions.js",
+  "scripts": {
+    "start": "func start",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@azure/cosmos": "^4.10.1",
+    "@azure/functions": "^4.17.0",
+    "@azure/identity": "4.13.0",
+    "@octokit/rest": "^22.0.1",
+    "jose": "^6.2.13",
+    "typescript": "~5.9.3",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.21"
+  }
+}
