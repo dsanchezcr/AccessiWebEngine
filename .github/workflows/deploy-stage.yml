@@ -29,7 +29,7 @@ jobs:
       name: ${{ inputs.environment }}
       url: ${{ steps.swa.outputs.static_web_app_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 22
