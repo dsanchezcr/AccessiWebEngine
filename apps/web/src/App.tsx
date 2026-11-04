@@ -7,7 +7,7 @@ import type {
   SourceCodeAuditReport,
 } from '../../../packages/shared/src/types'
 import { createScoreBadgeMarkdown } from '../../../packages/shared/src/scoreBadge'
-import { repositoryScanLimitsDescription } from '../../../packages/shared/src/scanLimits'
+import { repositoryScanLimitsDescription, webScanLimitsDescription } from '../../../packages/shared/src/scanLimits'
 import { apiScope, loginRequest, profileEditRequest } from './auth/msalConfig'
 import './App.css'
 
@@ -63,6 +63,7 @@ const pages: Record<string, { title: string; intro: string; sections: Array<[str
     intro: 'Audits follow a transparent pipeline. Meta models assist with analysis and proposed changes; repository writes are gated and reviewed through a pull request.',
     sections: [
       ['1. Ingest', 'Azure Functions validate a public URL or GitHub repository. Page markup and repository files are processed in memory.'],
+      ['Web scan limits', webScanLimitsDescription],
       ['Repository scan limits', repositoryScanLimitsDescription],
       ['2. Audit', 'Muse Spark returns structured findings and can interpret user-provided screenshots with estimated element bounds. Repository audits can route to Muse Spark Open through a configured partner endpoint.'],
       ['3. Remediate & verify', 'For enabled preview accounts, Muse Spark proposes complete file patches and verification notes.'],
@@ -106,6 +107,12 @@ async function apiRequest<T>(path: string, token: string | undefined, options?: 
       ...options?.headers,
     },
   })
+  const isJson = response.headers.get('content-type')?.includes('application/json')
+  if (!isJson) {
+    if (response.status === 504) throw new Error('The scan gateway timed out before analysis finished. Please try again later or choose a smaller page.')
+    if (response.status === 502 || response.status === 503) throw new Error('The analysis service could not be reached. Please try again later.')
+    throw new Error(`The service returned an unexpected response (${response.status}). Please try again later.`)
+  }
   const payload = await response.json() as T & { error?: string }
   if (!response.ok) throw new Error(payload.error || `Request failed (${response.status}).`)
   return payload
@@ -515,16 +522,10 @@ function Workspace() {
           }
         : { repoUrl }
       const token = authenticated ? await getAccessToken(instance, accounts[0]) : undefined
-      const response = await fetch(apiUrl(endpoint), {
+      const body = await apiRequest<ScanResult>(endpoint, token, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: 'Bearer ' + token } : {}),
-        },
         body: JSON.stringify(payload),
       })
-      const body = await response.json() as ScanResult & { error?: string }
-      if (!response.ok) throw new Error(body.error || 'The scan could not be completed.')
       setResult(body)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The scan could not be completed.')
@@ -715,7 +716,7 @@ function Workspace() {
               </div>
             ) : null}
             <p id="scan-target-help" className="form-hint">
-              {mode === 'repo' ? repositoryScanLimitsDescription : 'Only public HTML pages up to 1 MB (1,000,000 bytes) are accepted. The page must respond within 15 seconds per request, with no more than 3 redirects.'}
+              {mode === 'repo' ? repositoryScanLimitsDescription : webScanLimitsDescription}
               {' '}Source content is processed ephemerally.
             </p>
             {error ? <p className="error-message" role="alert">{error}</p> : null}

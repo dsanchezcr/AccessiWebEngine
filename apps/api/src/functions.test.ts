@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events'
 import type { LookupFunction } from 'node:net'
 import { beforeEach, mock, test } from 'node:test'
 import { MetaApiError } from '../../../packages/engine/src/metaClient.ts'
+import { WEB_SCAN_LIMITS } from '../../../packages/shared/src/scanLimits.ts'
 
 // npm test builds the API before running these compiled-module tests.
 const compiled = (name: string) => new URL(`../dist/apps/api/src/${name}.js`, import.meta.url).href
@@ -25,6 +26,7 @@ let forkCalls = 0
 let responseStatus = 200
 let responseContentType = 'text/html'
 let responseBody = '<html lang="en"><main>Public page</main></html>'
+let responseChunks: string[] | undefined
 let responseError: Error | undefined
 let outgoingError: Error | undefined
 let redirectLocation = 'https://public.example/next'
@@ -174,7 +176,10 @@ const requestPage = (url: URL, options: { family: number; lookup: LookupFunction
         incoming.emit('error', responseError)
         return
       }
-      incoming.emit('data', responseBody)
+      for (const chunk of responseChunks ?? [responseBody]) {
+        incoming.emit('data', chunk)
+        if (destroyed) break
+      }
       if (!destroyed) incoming.emit('end')
     })
   }
@@ -252,6 +257,7 @@ beforeEach(() => {
   responseStatus = 200
   responseContentType = 'text/html'
   responseBody = '<html lang="en"><main>Public page</main></html>'
+  responseChunks = undefined
   responseError = undefined
   outgoingError = undefined
   redirectLocation = 'https://public.example/next'
@@ -653,14 +659,37 @@ for (const [error, status] of [
   })
 }
 
-for (const bytes of [1_000_000, 1_000_001]) {
+for (const bytes of [1_000_001, 5_000_000, 5_000_001]) {
   test(`web scan enforces the exact UTF-8 page size limit at ${bytes} bytes`, async () => {
-    responseBody = '\u00e9'.repeat(500_000) + (bytes === 1_000_001 ? 'a' : '')
+    responseBody = '\u00e9'.repeat(Math.floor(bytes / 2)) + (bytes % 2 ? 'a' : '')
     const result = await invoke('webScan', { targetUrl: 'https://public.example' })
-    assert.equal(result.status, bytes === 1_000_000 ? 200 : 413)
-    assert.equal(modelCalls, bytes === 1_000_000 ? 1 : 0)
+    const accepted = bytes <= WEB_SCAN_LIMITS.maxHtmlBytes
+    assert.equal(result.status, accepted ? 200 : 413)
+    assert.equal(modelCalls, accepted ? 1 : 0)
+    assert.equal(savedScans.length, accepted ? 1 : 0)
+    if (!accepted) assert.match(result.jsonBody.error, /5 MB \(5,000,000 bytes\)/)
   })
 }
+
+test('web scan counts bytes across streamed chunks and rejects the first byte above 5 MB', async () => {
+  responseChunks = ['a'.repeat(3_000_000), '\u00e9'.repeat(1_000_000), 'x']
+  const result = await invoke('webScan', { targetUrl: 'https://public.example' })
+  assert.equal(result.status, 413)
+  assert.equal(modelCalls, 0)
+  assert.equal(savedScans.length, 0)
+})
+
+test('web scan retains the 15-second timeout on every redirect request', async (t) => {
+  const timeouts: number[] = []
+  t.mock.method(AbortSignal, 'timeout', (milliseconds: number) => {
+    timeouts.push(milliseconds)
+    return new AbortController().signal
+  })
+  responseStatus = 301
+  followRedirectWithSuccess = true
+  assert.equal((await invoke('webScan', { targetUrl: 'https://public.example' })).status, 200)
+  assert.deepEqual(timeouts, [15_000, 15_000])
+})
 
 for (const [code, status] of [
   ['not_configured', 503], ['unavailable', 503], ['timeout', 504],

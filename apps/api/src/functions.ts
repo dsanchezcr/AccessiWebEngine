@@ -12,7 +12,7 @@ import {
   WebScanRequestSchema,
 } from '../../../packages/shared/src/schemas.js'
 import { renderScoreBadgeSvg } from '../../../packages/shared/src/scoreBadge.js'
-import { REPOSITORY_SCAN_LIMITS } from '../../../packages/shared/src/scanLimits.js'
+import { REPOSITORY_SCAN_LIMITS, WEB_SCAN_LIMITS } from '../../../packages/shared/src/scanLimits.js'
 import { MetaAiClient, MetaApiError } from '../../../packages/engine/src/metaClient.js'
 import { collectDomBaseline } from './domBaseline.js'
 import {
@@ -60,7 +60,9 @@ const fail = (error: unknown, context: InvocationContext, stage = 'request'): Ht
     const failures = {
       not_configured: [503, 'AI analysis is not configured. Contact the operator to check the model endpoint, model name, and credentials.'],
       unavailable: [503, 'The AI analysis service is temporarily unavailable. Please try again later.'],
-      timeout: [504, 'The AI analysis service timed out. Please try again later.'],
+      timeout: [504, stage === 'analyze_page'
+        ? 'The AI analysis service exceeded its analysis deadline. Try a smaller page or omit the optional screenshot. If this continues, contact the operator to check model availability.'
+        : 'The AI analysis service timed out. Please try again later.'],
       request_failed: [502, 'The AI analysis service rejected the scan. Contact the operator to check model access and endpoint compatibility.'],
       invalid_response: [502, 'The AI analysis service returned an invalid report. Please try again later.'],
     } as const
@@ -220,7 +222,7 @@ const requirePreview = async (request: HttpRequest) => {
 
 const fetchHtml = async (initialUrl: string): Promise<string> => {
   let url = initialUrl
-  for (let redirects = 0; redirects <= 3; redirects += 1) {
+  for (let redirects = 0; redirects <= WEB_SCAN_LIMITS.maxRedirects; redirects += 1) {
     let validated: URL
     let address: string
     try {
@@ -245,7 +247,7 @@ const fetchHtml = async (initialUrl: string): Promise<string> => {
         lookup: lookupPinned,
         family: isIP(address),
         headers: { 'User-Agent': 'AccessiWebEngine/0.1 accessibility-audit' },
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(WEB_SCAN_LIMITS.pageRequestTimeoutMs),
       }, (incoming) => {
         incoming.on('error', reject)
         const status = incoming.statusCode ?? 0
@@ -279,8 +281,8 @@ const fetchHtml = async (initialUrl: string): Promise<string> => {
         incoming.setEncoding('utf8')
         incoming.on('data', (chunk: string) => {
           size += Buffer.byteLength(chunk)
-          if (size > 1_000_000) {
-            outgoing.destroy(new RequestError(413, 'The target page is too large to analyze.'))
+          if (size > WEB_SCAN_LIMITS.maxHtmlBytes) {
+            outgoing.destroy(new RequestError(413, `The target HTML document exceeds ${WEB_SCAN_LIMITS.maxHtmlBytes / 1_000_000} MB (${WEB_SCAN_LIMITS.maxHtmlBytes.toLocaleString('en-US')} bytes). Choose a smaller page; linked assets do not count toward this limit.`))
             return
           }
           body += chunk
@@ -300,7 +302,7 @@ const fetchHtml = async (initialUrl: string): Promise<string> => {
       throw new RequestError(502, 'The target page connection failed. Check that the site is publicly reachable and has a valid HTTPS certificate.')
     })
     if ([301, 302, 303, 307, 308].includes(response.status)) {
-      if (!response.location || redirects === 3) throw new RequestError(400, 'The target URL has too many redirects.')
+      if (!response.location || redirects === WEB_SCAN_LIMITS.maxRedirects) throw new RequestError(400, 'The target URL has too many redirects.')
       url = new URL(response.location, validated).href
       continue
     }

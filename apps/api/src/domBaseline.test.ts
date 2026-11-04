@@ -17,12 +17,20 @@ test('static DOM baseline reports language, labels, images, headings, and click 
     formControlCount: 1,
     controlsWithAccessibleLabel: 1,
     headingLevels: [1, 3],
+    headingLevelsTruncated: false,
     headingOrderSkips: 1,
     landmarkCount: 1,
     nonEmptyAltCount: 0,
     inlineClickHandlerCount: 1,
   })
   assert.match(baseline.note, /does not execute page scripts/)
+})
+
+test('large pages bound heading samples sent to AI while retaining whole-page skip counts', () => {
+  const baseline = collectDomBaseline('<h1>Title</h1><h3>Skipped</h3>'.repeat(1000))
+  assert.equal(baseline.checks.headingLevels.length, 100)
+  assert.equal(baseline.checks.headingLevelsTruncated, true)
+  assert.equal(baseline.checks.headingOrderSkips, 1000)
 })
 
 test('heading levels preserve source order and count only upward skips', () => {
