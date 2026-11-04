@@ -27,7 +27,38 @@ const response = (content: object) =>
     usage: { prompt_tokens: 17, completion_tokens: 9 },
   }), { status: 200 })
 
-test('Meta client sends authenticated structured requests and reports usage', async () => {
+for (const [baseUrl, expectedUrl] of [
+  ['https://api.meta.ai', 'https://api.meta.ai/v1/chat/completions'],
+  ['https://api.meta.ai/', 'https://api.meta.ai/v1/chat/completions'],
+  ['https://api.meta.ai/v1', 'https://api.meta.ai/v1/chat/completions'],
+  [' https://api.meta.ai/v1/// ', 'https://api.meta.ai/v1/chat/completions'],
+  ['https://gateway.example/models/meta/v1/', 'https://gateway.example/models/meta/v1/chat/completions'],
+  ['https://gateway.example', 'https://gateway.example/chat/completions'],
+]) {
+  test(`web scan resolves the chat endpoint for ${baseUrl}`, async () => {
+    let calls = 0
+    const client = new MetaAiClient({
+      apiKey: 'test-key', baseUrl,
+      fetcher: async (input, init) => {
+        calls += 1
+        assert.equal(String(input), expectedUrl)
+        assert.equal(init?.method, 'POST')
+        assert.equal(init?.redirect, 'error')
+        assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer test-key')
+        return response({
+          summary: 'Audit complete.', score: 100, findings: [],
+          categoryScores: { perceivable: 100, operable: 100, understandable: 100, robust: 100 },
+        })
+      },
+    })
+    const report = await client.analyzeWebDomAndVisuals('https://example.com', '<main />', '', {})
+    assert.equal(report.score, 100)
+    assert.deepEqual(report.visualSegments, [])
+    assert.equal(calls, 1)
+  })
+}
+
+test('Meta client sends documented authenticated structured requests and reports usage', async () => {
   let requestBody: Record<string, unknown> | undefined
   let authorization = ''
   let usage: unknown
@@ -50,10 +81,71 @@ test('Meta client sends authenticated structured requests and reports usage', as
   const report = await client.analyzeRepositorySource('https://github.com/acme/site', [])
 
   assert.equal(authorization, 'Bearer ' + 'test-key')
-  assert.equal(requestBody?.model, 'muse-code')
-  assert.deepEqual((requestBody?.response_format as { type: string }).type, 'json_schema')
+  assert.equal(requestBody?.model, 'muse-spark-1.3')
+  const format = requestBody?.response_format as {
+    type: string
+    json_schema: { name: string; strict: boolean; schema: { additionalProperties: boolean; required: string[] } }
+  }
+  assert.equal(format.type, 'json_schema')
+  assert.equal(format.json_schema.name, 'accessibility_response')
+  assert.equal(format.json_schema.strict, true)
+  assert.equal(format.json_schema.schema.additionalProperties, false)
+  assert.deepEqual(format.json_schema.schema.required, ['summary', 'score', 'findings', 'categoryScores'])
   assert.equal(report.repoUrl, 'https://github.com/acme/site')
-  assert.deepEqual(usage, { model: 'muse-code', inputTokens: 17, outputTokens: 9 })
+  assert.deepEqual(usage, { model: 'muse-spark-1.3', inputTokens: 17, outputTokens: 9 })
+})
+
+test('Meta environment configuration uses the versioned endpoint and preserves the selected model', async () => {
+  process.env.META_API_BASE_URL = 'https://api.meta.ai'
+  process.env.META_API_KEY = 'test-key'
+  process.env.META_MUSE_CODE_MODEL = 'selected-model'
+  const client = new MetaAiClient({
+    fetcher: async (input, init) => {
+      assert.equal(String(input), 'https://api.meta.ai/v1/chat/completions')
+      assert.equal(JSON.parse(String(init?.body)).model, 'selected-model')
+      return response({
+        summary: 'Audit complete.', score: 100, findings: [],
+        categoryScores: { perceivable: 100, operable: 100, understandable: 100, robust: 100 },
+      })
+    },
+  })
+  assert.equal((await client.analyzeRepositorySource('https://github.com/acme/site', [])).score, 100)
+})
+
+for (const baseUrl of [
+  'not a URL',
+  'https://dev.meta.ai/docs/authentication',
+  'https://api.meta.ai/docs/authentication',
+  'https://api.meta.ai/v1/chat/completions',
+  'http://api.meta.ai',
+  'https://username:secret@api.meta.ai',
+  'https://api.meta.ai?secret=value',
+  'https://api.meta.ai#secret',
+]) {
+  test(`invalid model base URL fails before sending credentials: ${baseUrl}`, async () => {
+    const client = new MetaAiClient({
+      apiKey: 'test-key', baseUrl,
+      fetcher: async () => assert.fail('Invalid configuration must not send a request'),
+    })
+    await assert.rejects(client.analyzeWebDomAndVisuals('https://example.com', '<main />', '', {}), (error) => {
+      assert.ok(error instanceof MetaApiError)
+      assert.equal(error.code, 'not_configured')
+      assert.doesNotMatch(error.message, /secret|test-key/)
+      return true
+    })
+  })
+}
+
+test('empty model identifiers fail before sending a request', async () => {
+  const client = new MetaAiClient({
+    apiKey: 'test-key', baseUrl: 'https://api.meta.ai', museCodeModel: ' ',
+    fetcher: async () => assert.fail('Invalid configuration must not send a request'),
+  })
+  await assert.rejects(client.analyzeRepositorySource('https://github.com/acme/site', []), (error) => {
+    assert.ok(error instanceof MetaApiError)
+    assert.equal(error.code, 'not_configured')
+    return true
+  })
 })
 
 test('Meta client retries transient errors and fails fast without configuration', async () => {
@@ -64,8 +156,8 @@ test('Meta client retries transient errors and fails fast without configuration'
     fetcher: async (_input, init) => {
       calls += 1
       if (calls === 1) return new Response('', { status: 503 })
-      const request = JSON.parse(String(init?.body)) as { model: string }
-      return request.model === 'sam-3.1'
+      const request = JSON.parse(String(init?.body)) as { messages: Array<{ content: unknown }> }
+      return Array.isArray(request.messages[1].content)
         ? response({ segments: [] })
         : response({
           summary: 'No issues found.',
@@ -443,19 +535,21 @@ test('model endpoint redirects are rejected without forwarding credentials', asy
   await assert.rejects(client.analyzeRepositorySource('https://github.com/acme/site', []), /status 307/)
 })
 
-test('web analysis sends the screenshot as a multimodal image and includes viewport context', async () => {
+test('web analysis uses Muse Spark image understanding and passes validated bounds to the DOM audit', async () => {
   const requests: Array<{ model: string; messages: Array<{ content: unknown }> }> = []
+  const segments = [{ label: 'Save', bounds: { x: 10, y: 20, width: 120, height: 40 }, issue: 'Low contrast' }]
   const client = new MetaAiClient({
     apiKey: 'test-key',
-    baseUrl: 'https://meta.example/v1',
-    fetcher: async (_input, init) => {
+    baseUrl: 'https://api.meta.ai',
+    fetcher: async (input, init) => {
+      assert.equal(String(input), 'https://api.meta.ai/v1/chat/completions')
       const request = JSON.parse(String(init?.body)) as {
         model: string
         messages: Array<{ content: unknown }>
       }
       requests.push(request)
-      return request.model === 'sam-3.1'
-        ? response({ segments: [] })
+      return Array.isArray(request.messages[1].content)
+        ? response({ segments })
         : response({
             summary: 'Audit complete.',
             score: 100,
@@ -465,7 +559,7 @@ test('web analysis sends the screenshot as a multimodal image and includes viewp
     },
   })
 
-  await client.analyzeWebDomAndVisuals(
+  const report = await client.analyzeWebDomAndVisuals(
     'https://example.com',
     '<main></main>',
     'data:image/webp;base64,aW1hZ2U=',
@@ -473,11 +567,19 @@ test('web analysis sends the screenshot as a multimodal image and includes viewp
     'mobile',
   )
 
-  const samMessage = requests[0].messages[1].content as Array<{ type: string; image_url?: { url: string } }>
+  const visionMessage = requests[0].messages[1].content as Array<{ type: string; text?: string; image_url?: { url: string } }>
   const museMessage = requests[1].messages[1].content as string
-  assert.equal(requests[0].model, 'sam-3.1')
-  assert.equal(samMessage[1].type, 'image_url')
-  assert.equal(samMessage[1].image_url?.url, 'data:image/webp;base64,aW1hZ2U=')
+  assert.equal(requests.length, 2)
+  assert.equal(requests[0].model, 'muse-spark-1.3')
+  assert.match(String(requests[0].messages[0].content), /estimated bounds in raw screenshot pixels/)
+  assert.match(String(requests[0].messages[0].content), /do not infer CSS-pixel target sizes/)
+  assert.equal(visionMessage[0].type, 'text')
+  assert.match(visionMessage[0].text ?? '', /"viewport":"mobile"/)
+  assert.equal(visionMessage[1].type, 'image_url')
+  assert.equal(visionMessage[1].image_url?.url, 'data:image/webp;base64,aW1hZ2U=')
   assert.match(museMessage, /"viewport":"mobile"/)
-  assert.equal(requests[1].model, 'muse-code')
+  assert.deepEqual(JSON.parse(museMessage).visualSegments, segments)
+  assert.equal(requests[1].model, 'muse-spark-1.3')
+  assert.deepEqual(report.visualSegments, segments)
+  assert.equal(JSON.stringify(report).includes('aW1hZ2U='), false)
 })

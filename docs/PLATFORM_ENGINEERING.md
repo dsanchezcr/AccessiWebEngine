@@ -48,11 +48,12 @@ Set the following Actions variables at repository scope for PR deployments and s
 | Variable | Purpose |
 | --- | --- |
 | `AZURE_DEPLOYMENT_PRINCIPAL_ID` | Service principal object ID used for Key Vault role assignment |
-| `META_API_BASE_URL` | OpenAI-compatible Meta Model API base URL |
+| `META_API_BASE_URL` | `https://api.meta.ai/v1` for Meta-hosted scans; the official root `https://api.meta.ai` is also normalized to `/v1` |
 | `META_ANALYSIS_PROVIDER` | `meta` or `open-weights` |
 | `META_MUSE_SPARK_OPEN_URL` | Optional open-weights endpoint |
 | `META_MUSE_SPARK_OPEN_MODEL` | Partner model identifier; required when open-weights analysis is selected |
-| `META_MUSE_CODE_MODEL`, `META_SAM_MODEL`, `META_MUSE_WONDER_MODEL`, `META_MUSE_IMAGE_MODEL` | Model identifiers (defaults are supplied by Bicep) |
+| `META_MUSE_CODE_MODEL` | Audit, screenshot interpretation, and remediation model; defaults to `muse-spark-1.3` |
+| `META_MUSE_WONDER_MODEL`, `META_MUSE_IMAGE_MODEL` | Optional audio/image helper model identifiers; require separately compatible capabilities |
 | `ISSUE_ALLOWED_REPOSITORIES` | Comma-separated `owner/repo` issue-write allowlist; mapped to the API's `GITHUB_ISSUE_ALLOWED_REPOSITORIES` runtime setting |
 | `ENTRA_B2C_TENANT_NAME` | B2C tenant short name |
 | `ENTRA_B2C_CLIENT_ID` | Client/application ID |
@@ -127,6 +128,16 @@ Repository audits and remediation preview accept at most **60 supported files** 
 
 Web audits accept HTML up to **1 MB (1,000,000 bytes)**, **3 redirects**, and **15 seconds per target request**. Every destination is validated and DNS-pinned; public IPv4 is preferred when both address families are present because Linux Functions may lack outbound IPv6. Private/special-purpose addresses remain blocked even when mixed with public DNS answers.
 
-Target connection/TLS failures return **502** and target timeouts return **504** with a message in the scan form. Model request rejection or invalid model reports return **502**; unavailable or unconfigured analysis returns **503**, and model timeouts return **504**. Confirm `META_API_BASE_URL`, credentials, model access, and support for `/chat/completions` with strict JSON Schema responses. Repository open-weights routing does not change the Meta endpoint used by web scans.
+Target connection/TLS failures return **502** and target timeouts return **504** with a message in the scan form. Model request rejection or invalid model reports return **502**; unavailable or unconfigured analysis returns **503**, and model timeouts return **504**. Repository open-weights routing does not change the Meta endpoint used by web scans.
+
+For **"The AI analysis service rejected the scan"** on Meta-hosted deployments:
+
+1. Set `META_API_BASE_URL=https://api.meta.ai/v1`. The client appends `/chat/completions`; Meta serves this at `/v1/chat/completions`, not `/chat/completions`. Updated clients normalize `https://api.meta.ai` to `/v1` automatically. Do not use a `dev.meta.ai/docs/...` URL, a full `/chat/completions` URL, or dashboard query parameters as the base URL. Custom HTTPS proxies/partners retain their configured path prefix.
+2. Set `META_MUSE_CODE_MODEL=muse-spark-1.3`, or another model your key can access that supports structured JSON and image inputs. Replace any explicit `muse-code` variable: a new workflow default does not override an existing variable. Confirm available IDs using `GET https://api.meta.ai/v1/models` with the same server-side key. See Meta's [models](https://dev.meta.ai/docs/models), [authentication](https://dev.meta.ai/docs/authentication), and [structured output](https://dev.meta.ai/docs/structured-output) documentation.
+3. Keep `META_API_KEY` in the GitHub secret/Key Vault, not a browser variable. Meta uses `Authorization: Bearer <key>`; no team/project query parameters are needed. Check that the Function's Key Vault reference resolves and that the key belongs to a team with model access. Upstream **401/403** usually indicates credentials or permissions; **400/404** can indicate the wrong path, model ID, or unsupported request format.
+4. Update repository and overriding `staging`, `qa`, and `prod` environment variables, then run the normal `main` promotion pipeline with its approval gates. Changing a GitHub variable alone does not update an already deployed Function. For an urgent settings-only correction on the old build, set the deployed Function's `META_API_BASE_URL` to the versioned URL and `META_MUSE_CODE_MODEL` to the supported ID as well; the updated build is required for screenshot scans.
+5. After deployment, run a small public web scan without a screenshot, then repeat with a screenshot if needed. Confirm that a real report and scan ID are returned, not just a successful `/api/v1/health` response.
+
+Screenshot interpretation now uses Muse Spark's documented [image understanding](https://dev.meta.ai/docs/image-understanding) request format (`image_url` content in chat completions) and the existing validated report schema. Bounds are estimates in raw screenshot pixels, not segmentation masks or proof of CSS target sizes/contrast compliance. Remove the obsolete `META_SAM_MODEL` setting: Meta documents SAM 3.1 under the separate [media segmentation](https://dev.meta.ai/docs/media-segmentation) Responses API, which cannot satisfy the old chat/JSON screenshot request.
 
 In Application Insights, `AccessiWeb request failed.` includes the web scan stage (`web_scan_identity`, `web_scan_quota`, `fetch_page`, `analyze_page`, or `save_web_scan`). Model failures also include a safe error code and upstream HTTP status when available. Check Cosmos configuration/managed-identity access for quota or persistence failures. These diagnostics do not log raw HTML, source files, model responses, URLs, or bearer tokens. A healthy liveness endpoint alone does not verify a successful scan.
