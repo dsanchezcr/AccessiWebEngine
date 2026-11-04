@@ -68,7 +68,8 @@ export const collectDomBaseline = (html: string) => {
         Boolean(exactAttributeValue(control, 'aria-labelledby')?.trim()) ||
         labelledIds.has(exactAttributeValue(control, 'id') ?? ''),
       ).length,
-      headingLevels: headings,
+      headingLevels: headings.slice(0, 100),
+      headingLevelsTruncated: headings.length > 100,
       headingOrderSkips: headings.slice(1).filter((level, index) => level > headings[index] + 1).length,
       landmarkCount: tags.filter((tag) =>
         ['main', 'nav', 'header', 'footer', 'aside', 'section']

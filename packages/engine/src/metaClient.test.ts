@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
-import test, { afterEach, beforeEach } from 'node:test'
+import test, { afterEach, beforeEach, type TestContext } from 'node:test'
 import { MetaAiClient, MetaApiError, validateSourceSyntax, wrapUntrustedInput } from './metaClient.ts'
+import { WEB_SCAN_LIMITS } from '../../shared/src/scanLimits.ts'
 
 let metaEnvironment: Record<string, string | undefined>
 beforeEach(() => {
@@ -205,12 +206,12 @@ for (const [status, code, expectedCalls] of [
   })
 }
 
-for (const [failure, code] of [
-  [new DOMException('aborted', 'AbortError'), 'timeout'],
-  [new DOMException('timed out', 'TimeoutError'), 'timeout'],
-  [new TypeError('fetch failed'), 'unavailable'],
+for (const [failure, code, expectedCalls] of [
+  [new DOMException('aborted', 'AbortError'), 'timeout', 1],
+  [new DOMException('timed out', 'TimeoutError'), 'timeout', 1],
+  [new TypeError('fetch failed'), 'unavailable', 3],
 ] as const) {
-  test(`web analysis retries and classifies model ${failure.name}`, async (t) => {
+  test(`web analysis classifies model ${failure.name} with ${expectedCalls} attempt(s)`, async (t) => {
     t.mock.method(globalThis, 'setTimeout', (callback: () => void) => {
       queueMicrotask(callback)
       return {} as NodeJS.Timeout
@@ -225,9 +226,147 @@ for (const [failure, code] of [
       assert.equal(error.code, code)
       return true
     })
-    assert.equal(calls, 3)
+    assert.equal(calls, expectedCalls)
   })
 }
+
+const mockModelClock = (t: TestContext) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.mock.method(AbortSignal, 'timeout', (milliseconds: number) => {
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(new DOMException('Deadline exceeded', 'TimeoutError')), milliseconds)
+    return controller.signal
+  })
+}
+
+const completeAudit = {
+  summary: 'Audit complete.', score: 100, findings: [],
+  categoryScores: { perceivable: 100, operable: 100, understandable: 100, robust: 100 },
+}
+
+test('a web model response after 45 seconds succeeds without restarting at 30 seconds', async (t) => {
+  mockModelClock(t)
+  let calls = 0
+  let completed = false
+  const client = new MetaAiClient({
+    apiKey: 'test-key', baseUrl: 'https://api.meta.ai',
+    fetcher: async (_input, init) => new Promise<Response>((resolve, reject) => {
+      calls += 1
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+      setTimeout(() => resolve(response(completeAudit)), 45_000)
+    }),
+  })
+  const pending = client.analyzeWebDomAndVisuals('https://example.com', '<main />', '', {})
+    .then((report) => { completed = true; return report })
+  t.mock.timers.tick(30_001)
+  await new Promise(setImmediate)
+  assert.equal(completed, false)
+  assert.equal(calls, 1)
+  t.mock.timers.tick(14_999)
+  assert.equal((await pending).score, 100)
+  assert.equal(calls, 1)
+})
+
+test('screenshot and DOM analysis share one 120-second deadline and do not retry its expiry', async (t) => {
+  mockModelClock(t)
+  const signals: Array<AbortSignal | null | undefined> = []
+  let completed = false
+  const client = new MetaAiClient({
+    apiKey: 'test-key', baseUrl: 'https://api.meta.ai',
+    fetcher: async (_input, init) => new Promise<Response>((resolve, reject) => {
+      signals.push(init?.signal)
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+      setTimeout(() => resolve(signals.length === 1 ? response({ segments: [] }) : response(completeAudit)), 70_000)
+    }),
+  })
+  const rejected = assert.rejects(
+    client.analyzeWebDomAndVisuals('https://example.com', '<main />', 'image', {}),
+    (error) => error instanceof MetaApiError && error.code === 'timeout',
+  ).then(() => { completed = true })
+  t.mock.timers.tick(70_000)
+  await new Promise(setImmediate)
+  assert.equal(signals.length, 2)
+  assert.equal(signals[0], signals[1])
+  t.mock.timers.tick(49_999)
+  await new Promise(setImmediate)
+  assert.equal(completed, false)
+  t.mock.timers.tick(1)
+  await rejected
+  assert.equal(signals.length, 2)
+})
+
+test('the shared model deadline also bounds retry backoff', async (t) => {
+  mockModelClock(t)
+  let calls = 0
+  const client = new MetaAiClient({
+    apiKey: 'test-key', baseUrl: 'https://api.meta.ai',
+    fetcher: async () => {
+      calls += 1
+      return new Promise<Response>((resolve) => setTimeout(() => resolve(new Response('', { status: 503 })), 119_900))
+    },
+  })
+  const rejected = assert.rejects(
+    client.analyzeWebDomAndVisuals('https://example.com', '<main />', '', {}),
+    (error) => error instanceof MetaApiError && error.code === 'timeout',
+  )
+  t.mock.timers.tick(119_900)
+  await new Promise(setImmediate)
+  t.mock.timers.tick(100)
+  await rejected
+  assert.equal(calls, 1)
+})
+
+for (const [baseUrl, model, reasoningEffort] of [
+  ['https://api.meta.ai', 'muse-spark-1.3', 'low'],
+  ['https://api.meta.ai', 'custom-model', undefined],
+  ['https://partner.example/v1', 'muse-spark-1.3', undefined],
+] as const) {
+  test(`interactive reasoning control is compatible with ${baseUrl} ${model}`, async () => {
+    const client = new MetaAiClient({
+      apiKey: 'test-key', baseUrl, museCodeModel: model,
+      fetcher: async (_input, init) => {
+        assert.equal(JSON.parse(String(init?.body)).reasoning_effort, reasoningEffort)
+        return response(completeAudit)
+      },
+    })
+    await client.analyzeWebDomAndVisuals('https://example.com', '<main />', '', {})
+  })
+}
+
+test('large web snapshots send bounded input and persist an explicit partial-review summary', async () => {
+  const html = `<script>${'x'.repeat(1_000_000)}</script><main>${'y'.repeat(150_000)}</main>`
+  const client = new MetaAiClient({
+    apiKey: 'test-key', baseUrl: 'https://api.meta.ai',
+    fetcher: async (_input, init) => {
+      const { messages } = JSON.parse(String(init?.body))
+      const input = JSON.parse(messages[1].content)
+      assert.deepEqual(input.inputCoverage, { truncated: true, reviewedCharacters: WEB_SCAN_LIMITS.maxModelCharacters })
+      assert.doesNotMatch(input.untrustedPageData, /xxxxx/)
+      assert.ok(input.untrustedPageData.length < WEB_SCAN_LIMITS.maxModelCharacters + 500)
+      return response(completeAudit)
+    },
+  })
+  const report = await client.analyzeWebDomAndVisuals('https://example.com', html, '', {})
+  assert.match(report.summary, /^Partial AI review: only the first 100,000 characters/)
+  assert.match(report.summary, /not a full-page assessment/)
+})
+
+test('large inline scripts do not crowd meaningful HTML out of the AI review', async () => {
+  const html = `<script>${'x'.repeat(2_000_000)}</script><main><button>Save</button></main>`
+  const client = new MetaAiClient({
+    apiKey: 'test-key', baseUrl: 'https://api.meta.ai',
+    fetcher: async (_input, init) => {
+      const { messages } = JSON.parse(String(init?.body))
+      const input = JSON.parse(messages[1].content)
+      assert.equal(input.inputCoverage.truncated, false)
+      assert.match(input.untrustedPageData, /&lt;button&gt;Save&lt;\/button&gt;/)
+      assert.doesNotMatch(input.untrustedPageData, /xxxxx/)
+      return response(completeAudit)
+    },
+  })
+  const report = await client.analyzeWebDomAndVisuals('https://example.com', html, '', {})
+  assert.equal(report.summary, completeAudit.summary)
+})
 
 for (const payload of [
   'not JSON',

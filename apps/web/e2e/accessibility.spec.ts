@@ -116,8 +116,9 @@ for (const [status, message] of [
   [502, 'The target page connection failed. Check that the site is publicly reachable and has a valid HTTPS certificate.'],
   [503, 'The AI analysis service is temporarily unavailable. Please try again later.'],
   [504, 'The target page took too long to respond. Try again later or choose another page.'],
+  [504, 'The AI analysis service exceeded its analysis deadline. Try a smaller page or omit the optional screenshot. If this continues, contact the operator to check model availability.'],
 ] as const) {
-  test(`web analysis displays an actionable ${status} error and allows retry`, async ({ page }) => {
+  test(`web analysis displays an actionable ${status} error and allows retry: ${message}`, async ({ page }) => {
     await page.route('**/api/v1/scans/web', (route) => route.fulfill({
       status, json: { error: message },
     }))
@@ -125,6 +126,32 @@ for (const [status, message] of [
     await page.getByLabel('Web page URL', { exact: true }).fill('https://example.com')
     await page.getByRole('button', { name: 'Analyze', exact: true }).click()
     await expect(page.getByRole('alert')).toHaveText(message)
+    await expect(page.getByRole('button', { name: 'Analyze', exact: true })).toBeEnabled()
+    await expect(page.getByRole('heading', { name: 'Your accessibility report' })).toHaveCount(0)
+  })
+}
+
+test('web analysis explains HTML size and separate AI limits before submission', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByLabel('Web page URL', { exact: true })).toHaveAccessibleDescription(
+    /5 MB \(5,000,000 bytes\).*not the total website download size.*15-second timeout.*120-second deadline.*100,000 remaining HTML characters/,
+  )
+  await page.goto('/how-it-works')
+  await expect(page.getByRole('heading', { name: 'Web scan limits' })).toBeVisible()
+  await expect(page.getByText(/Public HTML documents up to 5 MB/)).toBeVisible()
+})
+
+for (const status of [502, 504]) {
+  test(`HTML gateway ${status} responses show an actionable message rather than a JSON parse error`, async ({ page }) => {
+    await page.route('**/api/v1/scans/web', (route) => route.fulfill({
+      status, contentType: 'text/html', body: `<html><body>${status} gateway error</body></html>`,
+    }))
+    await page.goto('/')
+    await page.getByLabel('Web page URL', { exact: true }).fill('https://example.com')
+    await page.getByRole('button', { name: 'Analyze', exact: true }).click()
+    await expect(page.getByRole('alert')).toHaveText(status === 504
+      ? 'The scan gateway timed out before analysis finished. Please try again later or choose a smaller page.'
+      : 'The analysis service could not be reached. Please try again later.')
     await expect(page.getByRole('button', { name: 'Analyze', exact: true })).toBeEnabled()
     await expect(page.getByRole('heading', { name: 'Your accessibility report' })).toHaveCount(0)
   })
