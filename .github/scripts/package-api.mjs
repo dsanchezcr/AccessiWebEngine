@@ -37,8 +37,11 @@ try {
       const dependency = lock.packages[`${workspacePath}/node_modules/${name}`]
         ?? lock.packages[`node_modules/${name}`]
       assert(dependency?.version && !dependency.link, `Missing locked runtime dependency: ${name}`)
-      assert(!dependencies[name] || dependencies[name] === dependency.version, `Conflicting runtime dependency: ${name}`)
-      dependencies[name] = dependency.version
+      const pinnedVersion = dependency.name && dependency.name !== name
+        ? `npm:${dependency.name}@${dependency.version}`
+        : dependency.version
+      assert(!dependencies[name] || dependencies[name] === pinnedVersion, `Conflicting runtime dependency: ${name}`)
+      dependencies[name] = pinnedVersion
     }
   }
   const manifest = {
@@ -116,9 +119,10 @@ try {
       + 'return result; }';
     register('data:text/javascript,' + encodeURIComponent(loader), import.meta.url);
     await import('zod');
-    await import('typescript');
     await import('./dist/packages/shared/src/schemas.js');
-    await import('./dist/packages/engine/src/metaClient.js');
+    const { validateSourceSyntax } = await import('./dist/packages/engine/src/metaClient.js');
+    assert.deepEqual(validateSourceSyntax('example.ts', 'const value: number = 1;'), []);
+    assert(validateSourceSyntax('example.ts', 'const = ;').length > 0, 'Runtime syntax validation must reject invalid source.');
     const manifest = JSON.parse(await readFile('package.json', 'utf8'));
     await import('./' + manifest.main);
     console.log('Standalone API smoke passed: shared, engine, runtime dependencies, Functions entry.');

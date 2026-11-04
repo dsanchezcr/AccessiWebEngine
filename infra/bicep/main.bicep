@@ -32,12 +32,11 @@ param githubBotToken string
 @secure()
 param metaPreviewInviteCode string
 
-param metaApiBaseUrl string = ''
+param metaApiBaseUrl string = 'https://api.meta.ai/v1'
 param metaAnalysisProvider string = 'meta'
 param metaMuseSparkOpenUrl string = ''
 param metaMuseSparkOpenModel string = ''
-param metaMuseCodeModel string = 'muse-code'
-param metaSamModel string = 'sam-3.1'
+param metaMuseCodeModel string = 'muse-spark-1.3'
 param metaMuseWonderModel string = 'muse-wonder'
 param metaMuseImageModel string = 'muse-image'
 param githubIssueAllowedRepositories string = ''
@@ -127,7 +126,6 @@ module functionApp 'modules/functionapp.bicep' = {
     metaMuseSparkOpenModel: metaMuseSparkOpenModel
     enableMuseSparkOpenApiKey: !empty(metaMuseSparkOpenApiKey)
     metaMuseCodeModel: metaMuseCodeModel
-    metaSamModel: metaSamModel
     metaMuseWonderModel: metaMuseWonderModel
     metaMuseImageModel: metaMuseImageModel
     githubIssueAllowedRepositories: githubIssueAllowedRepositories

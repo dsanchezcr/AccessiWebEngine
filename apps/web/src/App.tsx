@@ -50,10 +50,10 @@ const pages: Record<string, { title: string; intro: string; sections: Array<[str
     title: 'What we scan',
     intro: 'AccessiWeb considers more than 50 WCAG 2.2 Level A, AA, and AAA criteria through AI-assisted review of page structure, source, and optional screenshots. Findings need human review.',
     sections: [
-      ['Visual & layout · SAM 3.1', rules[2][1]],
-      ['Targets & focus · SAM 3.1', `${rules[4][1]} ${rules[5][1]} ${rules[9][1]}`],
-      ['Semantic structure · Muse Code', `${rules[0][1]} ${rules[1][1]} Landmark and heading order, table headers, skip links, labels, invalid ARIA and image alternative quality.`],
-      ['Keyboard & interaction · Muse Code AST', `${rules[3][1]} ${rules[4][1]} Non-semantic click handlers, keyboard handlers, modal focus, focus traps, live announcements and dynamic status.`],
+      ['Visual & layout · Muse Spark', rules[2][1]],
+      ['Targets & focus · Muse Spark', `${rules[4][1]} ${rules[5][1]} ${rules[9][1]}`],
+      ['Semantic structure · Muse Spark', `${rules[0][1]} ${rules[1][1]} Landmark and heading order, table headers, skip links, labels, invalid ARIA and image alternative quality.`],
+      ['Keyboard & interaction · Muse Spark', `${rules[3][1]} ${rules[4][1]} Non-semantic click handlers, keyboard handlers, modal focus, focus traps, live announcements and dynamic status.`],
       ['Language, errors & compatibility', `${rules[6][1]} ${rules[7][1]} ${rules[8][1]}`],
       ['AAA checks', rules[9][1]],
     ],
@@ -64,8 +64,8 @@ const pages: Record<string, { title: string; intro: string; sections: Array<[str
     sections: [
       ['1. Ingest', 'Azure Functions validate a public URL or GitHub repository. Page markup and repository files are processed in memory.'],
       ['Repository scan limits', repositoryScanLimitsDescription],
-      ['2. Audit', 'Muse Code returns structured findings; SAM 3.1 can segment user-provided screenshots. Audits can route to Muse Spark Open through a configured partner endpoint.'],
-      ['3. Remediate & verify', 'For enabled preview accounts, Muse Code proposes complete file patches and verification notes.'],
+      ['2. Audit', 'Muse Spark returns structured findings and can interpret user-provided screenshots with estimated element bounds. Repository audits can route to Muse Spark Open through a configured partner endpoint.'],
+      ['3. Remediate & verify', 'For enabled preview accounts, Muse Spark proposes complete file patches and verification notes.'],
       ['4. Submit', 'GitHub Octokit creates a branch and pull request; Cosmos DB stores job/report data. Azure Static Web Apps serves the accessible React workspace. A maintainer reviews changes before merging.'],
     ],
   },
@@ -349,7 +349,7 @@ function Report({
       </div>
       {report.visualSegments?.length ? (
         <section aria-labelledby="visual-heading">
-          <h3 id="visual-heading">Visual segmentation</h3>
+          <h3 id="visual-heading">Visual analysis</h3>
           {screenshotDataUrl ? (
             <figure className="visual-overlay">
               <div className="visual-overlay-image">
@@ -377,7 +377,7 @@ function Report({
                   </span>
                 )) : null}
               </div>
-              <figcaption>Interactive elements segmented by SAM 3.1. Marked bounds indicate a visual concern.</figcaption>
+              <figcaption>Estimated interactive-element bounds from Muse Spark. Highlighted bounds indicate a potential visual concern.</figcaption>
             </figure>
           ) : null}
           <ul className="segment-list">
@@ -403,7 +403,7 @@ function Report({
                 {finding.selector ? <p className="finding-meta">DOM selector: <code>{finding.selector}</code></p> : null}
                 <div className="code-comparison">
                   {finding.codeSnippet ? <div><h5>Current code</h5><pre><code>{finding.codeSnippet}</code></pre></div> : null}
-                  {finding.suggestedFixCode ? <div><h5>Muse Code suggested fix</h5><pre><code>{finding.suggestedFixCode}</code></pre></div> : null}
+                  {finding.suggestedFixCode ? <div><h5>AI-suggested fix</h5><pre><code>{finding.suggestedFixCode}</code></pre></div> : null}
                 </div>
               </article>
             ))}
@@ -599,7 +599,7 @@ function Workspace() {
         <div>
           <p className="eyebrow">AI-assisted · Human-reviewed</p>
           <h1>Make accessibility part of every release.</h1>
-          <p className="hero-copy">In the AI era, web creation is growing exponentially. AccessiWeb Engine uses Meta AI and Muse Code to help make every website and repository accessible by default.</p>
+          <p className="hero-copy">In the AI era, web creation is growing exponentially. AccessiWeb Engine uses Meta AI and Muse Spark to help make every website and repository accessible by default.</p>
           <a className="button button-primary" href="#scanner">Start a free audit <span aria-hidden="true">→</span></a>
         </div>
         <aside className="hero-card" aria-label="Accessibility audit at a glance">

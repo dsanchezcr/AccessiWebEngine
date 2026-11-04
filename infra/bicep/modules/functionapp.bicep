@@ -13,7 +13,6 @@ param metaMuseSparkOpenUrl string
 param metaMuseSparkOpenModel string
 param enableMuseSparkOpenApiKey bool
 param metaMuseCodeModel string
-param metaSamModel string
 param metaMuseWonderModel string
 param metaMuseImageModel string
 param githubIssueAllowedRepositories string
@@ -119,7 +118,6 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
       META_MUSE_SPARK_OPEN_API_KEY: '@Microsoft.KeyVault(SecretUri=${keyVaultSecretUri}/meta-muse-spark-open-api-key/)'
     } : {})
     META_MUSE_CODE_MODEL: metaMuseCodeModel
-    META_SAM_MODEL: metaSamModel
     META_MUSE_WONDER_MODEL: metaMuseWonderModel
     META_MUSE_IMAGE_MODEL: metaMuseImageModel
     GITHUB_BOT_TOKEN: '@Microsoft.KeyVault(SecretUri=${keyVaultSecretUri}/github-bot-token/)'
