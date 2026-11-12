@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
-    "@vue/compiler-sfc": "^3.5.44",
-    "parse5": "^8.1.0",
+    "@vue/compiler-sfc": "^3.5.45",
+    "parse5": "^8.1.1",
     "svelte": "^5.57.3",
     "typescript-compiler": "npm:typescript@~6.0.3"
   }
